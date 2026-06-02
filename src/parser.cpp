@@ -1,5 +1,6 @@
 #include "parser.hpp"
 #include "formula.hpp"
+#include "heuristic.hpp"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <stdexcept>
@@ -490,12 +491,52 @@ PlanningTask load_task(const std::string& json_path) {
     task.goal =
         unwrap_formula(j.at("goal"), task.atom_index, task.agent_index);
 
+    // Detect partial observability.
+    //
+    // A domain has partial observability iff at least one action assigns
+    // different observability cases to different agents — i.e. some agents
+    // are Fully observable while others are Oblivious or have conditional
+    // cases. We detect this by checking whether any action has obs_cases
+    // entries that differ across agents (non-empty obs_cases for at least
+    // two agents with different case counts, or any agent with >0 cases that
+    // maps an event to a non-identity relation).
+    //
+    // The conservative proxy used here: partial_obs = true iff any action
+    // has at least two agents whose obs_cases list sizes differ. This catches
+    // all known partial-obs benchmarks (Gossip, Grapevine, AMC) without
+    // requiring us to inspect the actual event relations.
+    task.partial_obs = false;
+    for (auto& act : task.actions) {
+        if (act.obs_cases.empty()) continue;
+        size_t first_size = act.obs_cases[0].size();
+        for (size_t ag = 1; ag < act.obs_cases.size(); ag++) {
+            if (act.obs_cases[ag].size() != first_size) {
+                task.partial_obs = true;
+                break;
+            }
+        }
+        if (task.partial_obs) break;
+    }
+
+    // Detect Kw-only goal.
+    //
+    // A goal is Kw-only if it is a single Kw formula or a conjunction where
+    // every top-level conjunct is a Kw formula (FormulaKind::Kw, or an Or of
+    // two Belief formulas that the parser expands Kw into). We check the
+    // top-level structure only — deeper nesting is handled by the heuristic.
+    // has_atom_conjunct (defined in heuristic.hpp) returns true iff the formula
+    // has any bare atom at the top level, so goal_kw_only = !has_atom_conjunct.
+    task.goal_kw_only = task.goal && !has_atom_conjunct(*task.goal);
+
     std::cerr << "[parser] Loaded: "
               << task.num_atoms()   << " atoms, "
               << task.num_agents()  << " agents, "
               << task.init.worlds.size() << " worlds ("
               << task.init.designated.size() << " designated), "
-              << task.num_actions() << " actions.\n";
+              << task.num_actions() << " actions"
+              << "  partial_obs=" << task.partial_obs
+              << "  goal_kw_only=" << task.goal_kw_only
+              << "\n";
 
     return task;
 }
