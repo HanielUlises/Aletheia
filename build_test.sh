@@ -49,7 +49,6 @@ PLANNER="$BUILD/epistemic_planner"
 ALETHEIA="$REPO/aletheia.sh"
 BENCHMARK="$REPO/benchmark"
 
-
 info "Configuring (cmake) …"
 cmake -B "$BUILD" -S "$REPO" \
       -DCMAKE_BUILD_TYPE=Release \
