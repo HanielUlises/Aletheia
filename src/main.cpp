@@ -1,453 +1,542 @@
 #include "parser.hpp"
-#include "validator.hpp"
-#include "search.hpp"
+#include "formula.hpp"
 #include "heuristic.hpp"
-
-#include <iostream>
+#include <nlohmann/json.hpp>
 #include <fstream>
-#include <string>
 #include <stdexcept>
-#include <memory>
-#include <chrono>
-#include <algorithm>
+#include <iostream>
 
-static void write_plan_tree(std::ostream& out,
-                            const std::shared_ptr<PlanNode>& node,
-                            int indent = 0) {
-    std::string pad(indent * 2, ' ');
-    std::string pad2((indent + 1) * 2, ' ');
-    std::string pad3((indent + 2) * 2, ' ');
+using json = nlohmann::json;
 
-    if (!node) {
-        out << "null";
-        return;
+/**
+ * @brief Parse a logical formula from its JSON representation.
+ *
+ * Supports atomic propositions, boolean constants, logical connectives
+ * (negation, conjunction, disjunction), and modal operators (box, diamond).
+ *
+ * @param j JSON object encoding the formula.
+ * @param atom_idx Mapping from atom names to indices.
+ * @param agent_idx Mapping from agent names to indices.
+ * @return Parsed formula as a FormulaPtr.
+ *
+ * @throws std::runtime_error if the formula is malformed or references unknown symbols.
+ */
+static FormulaPtr parse_formula(
+    const json& j,
+    const std::unordered_map<std::string,AtomIdx>&  atom_idx,
+    const std::unordered_map<std::string,AgentIdx>& agent_idx)
+{
+    if (j.is_string()) {
+        std::string s = j.get<std::string>();
+        if (s == "true")  return Formula::make_top();
+        if (s == "false") return Formula::make_bot();
+
+        auto it = atom_idx.find(s);
+        if (it == atom_idx.end())
+            throw std::runtime_error("Unknown atom: " + s);
+
+        return Formula::make_atom(it->second);
     }
 
-    out << "{\n";
-    out << pad2 << "\"action\": \"" << node->action << "\",\n";
-    out << pad2 << "\"branches\": [\n";
+    if (!j.is_object())
+        throw std::runtime_error("Expected formula object or string");
 
-    for (size_t i = 0; i < node->branches.size(); i++) {
-        auto& [eid, child] = node->branches[i];
+    if (j.contains("connective")) {
+        std::string conn = j.at("connective").get<std::string>();
 
-        out << pad3 << "{\n";
-        out << pad3 << "  \"event\": " << eid << ",\n";
-        out << pad3 << "  \"subtree\": ";
-        write_plan_tree(out, child, indent + 3);
-        out << "\n" << pad3 << "}";
+        if (conn == "not") {
+            return Formula::make_not(
+                parse_formula(j.at("formula"), atom_idx, agent_idx));
+        }
 
-        if (i + 1 < node->branches.size())
-            out << ",";
+        if (conn == "and") {
+            std::vector<FormulaPtr> children;
+            for (auto& c : j.at("formulas"))
+                children.push_back(parse_formula(c, atom_idx, agent_idx));
+            return Formula::make_and(std::move(children));
+        }
 
-        out << "\n";
+        if (conn == "or") {
+            std::vector<FormulaPtr> children;
+            for (auto& c : j.at("formulas"))
+                children.push_back(parse_formula(c, atom_idx, agent_idx));
+            return Formula::make_or(std::move(children));
+        }
+
+        // imply: p -> q  ≡  ¬p ∨ q
+        if (conn == "imply") {
+            auto lhs = parse_formula(j.at("formulas")[0], atom_idx, agent_idx);
+            auto rhs = parse_formula(j.at("formulas")[1], atom_idx, agent_idx);
+            return Formula::make_or({Formula::make_not(lhs), rhs});
+        }
+
+        // forall over agents: universally quantified conjunction
+        // plank expands these at ground time so this is a fallback for
+        // any residual quantified formulas in the JSON
+        if (conn == "forall") {
+            if (j.contains("formulas")) {
+                std::vector<FormulaPtr> children;
+                for (auto& c : j.at("formulas"))
+                    children.push_back(parse_formula(c, atom_idx, agent_idx));
+                return Formula::make_and(std::move(children));
+            }
+            return parse_formula(j.at("formula"), atom_idx, agent_idx);
+        }
+
+        throw std::runtime_error("Unknown connective: " + conn);
     }
 
-    out << pad2 << "]\n";
-    out << pad << "}";
+    if (j.contains("modality-name")) {
+        std::string mname = j.at("modality-name").get<std::string>();
+        auto& midx = j.at("modality-index");
+
+        FormulaPtr child =
+            parse_formula(j.at("formula"), atom_idx, agent_idx);
+
+        if (mname == "box") {
+            if (midx.size() == 1) {
+                std::string aname = midx[0].get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent: " + aname);
+
+                return Formula::make_belief(it->second, child);
+            }
+
+            std::vector<AgentIdx> grp;
+            for (auto& a : midx) {
+                std::string aname = a.get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent in group: " + aname);
+                grp.push_back(it->second);
+            }
+
+            return Formula::make_common(std::move(grp), child);
+        }
+
+        if (mname == "diamond") {
+            if (midx.size() == 1) {
+                std::string aname = midx[0].get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent: " + aname);
+
+                return Formula::make_not(
+                    Formula::make_belief(it->second,
+                        Formula::make_not(child)));
+            }
+        }
+
+        // [Kw.i]φ  ≡  [i]φ ∨ [i]¬φ  (knowing-whether)
+        // [Kw.G]φ  ≡  ∧_{i∈G} ([i]φ ∨ [i]¬φ)  (group knowing-whether)
+        if (mname == "Kw.box") {
+            if (midx.size() == 1) {
+                std::string aname = midx[0].get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent: " + aname);
+                return Formula::make_kw(it->second, child);
+            }
+            if (midx.size() > 1) {
+                std::vector<FormulaPtr> conjuncts;
+                for (auto& a : midx) {
+                    std::string aname = a.get<std::string>();
+                    auto it = agent_idx.find(aname);
+                    if (it == agent_idx.end())
+                        throw std::runtime_error("Unknown agent in Kw.box group: " + aname);
+                    conjuncts.push_back(Formula::make_kw(it->second, child));
+                }
+                return Formula::make_and(std::move(conjuncts));
+            }
+        }
+
+        // <Kw.i>φ  ≡  ¬([i]φ ∨ [i]¬φ)  (not knowing-whether)
+        // <Kw.G>φ  ≡  ∨_{i∈G} ¬([i]φ ∨ [i]¬φ)
+        if (mname == "Kw.diamond") {
+            if (midx.size() == 1) {
+                std::string aname = midx[0].get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent: " + aname);
+                return Formula::make_not(Formula::make_kw(it->second, child));
+            }
+            if (midx.size() > 1) {
+                std::vector<FormulaPtr> disjuncts;
+                for (auto& a : midx) {
+                    std::string aname = a.get<std::string>();
+                    auto it = agent_idx.find(aname);
+                    if (it == agent_idx.end())
+                        throw std::runtime_error("Unknown agent in Kw.diamond group: " + aname);
+                    disjuncts.push_back(Formula::make_not(Formula::make_kw(it->second, child)));
+                }
+                return Formula::make_or(std::move(disjuncts));
+            }
+        }
+
+        // C.box — common knowledge/belief over a group
+        // plank emits "C.box" with modality-index listing all group agents
+        if (mname == "C.box") {
+            std::vector<AgentIdx> grp;
+            for (auto& a : midx) {
+                std::string aname = a.get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent in C.box group: " + aname);
+                grp.push_back(it->second);
+            }
+            return Formula::make_common(std::move(grp), child);
+        }
+
+        // C.diamond — dual: ¬C.box¬φ
+        if (mname == "C.diamond") {
+            std::vector<AgentIdx> grp;
+            for (auto& a : midx) {
+                std::string aname = a.get<std::string>();
+                auto it = agent_idx.find(aname);
+                if (it == agent_idx.end())
+                    throw std::runtime_error("Unknown agent in C.diamond group: " + aname);
+                grp.push_back(it->second);
+            }
+            return Formula::make_not(
+                Formula::make_common(std::move(grp), Formula::make_not(child)));
+        }
+
+        throw std::runtime_error("Unknown modality: " + mname);
+    }
+
+    throw std::runtime_error("Unrecognised formula shape");
 }
 
-static void write_linear_plan(std::ostream& out,
-                              const SearchResult& result) {
-    out << "[";
+/**
+ * @brief Extract and parse a formula, unwrapping a "formula" field if present.
+ *
+ * Some JSON structures wrap formulas inside a "formula" key. This function
+ * transparently handles both wrapped and direct representations.
+ *
+ * @param j JSON object containing the formula or wrapper.
+ * @param atom_idx Mapping from atom names to indices.
+ * @param agent_idx Mapping from agent names to indices.
+ * @return Parsed formula as a FormulaPtr.
+ */
+static FormulaPtr unwrap_formula(
+    const json& j,
+    const std::unordered_map<std::string,AtomIdx>&  atom_idx,
+    const std::unordered_map<std::string,AgentIdx>& agent_idx)
+{
+    if (j.contains("formula"))
+        return parse_formula(j.at("formula"), atom_idx, agent_idx);
 
-    for (size_t i = 0; i < result.plan.size(); i++) {
-        if (i > 0)
-            out << ", ";
-
-        out << "\"" << result.plan[i] << "\"";
-    }
-
-    out << "]\n";
+    return parse_formula(j, atom_idx, agent_idx);
 }
 
-enum class Strategy {
-    GBFS,
-    EHC,
-    AOSTAR
-};
+/**
+ * @brief Load a planning task from a JSON file.
+ *
+ * The input JSON is expected to follow a structured format including:
+ * - Language definition (atoms and agents)
+ * - Requirements (used to detect KD45 vs S5 frame constraints)
+ * - Initial epistemic state (worlds, valuations, accessibility relations)
+ * - Actions with events, preconditions, effects, and observability conditions
+ * - Goal formula
+ *
+ * The kd45 flag is set when the requirements contain ":kd45" or ":belief",
+ * indicating that all accessibility relations must be serial (KD45n frame).
+ * Product update will enforce seriality on the resulting state when this flag
+ * is true, preventing vacuous-truth errors from worlds with empty R_i rows.
+ *
+ * @param json_path Path to the JSON file.
+ * @return Fully constructed PlanningTask instance.
+ *
+ * @throws std::runtime_error if the file cannot be read or parsing fails.
+ */
+PlanningTask load_task(const std::string& json_path) {
+    std::ifstream f(json_path);
+    if (!f.is_open())
+        throw std::runtime_error("Cannot open JSON file: " + json_path);
 
-static bool has_sensing_actions(const PlanningTask& task) {
-    for (auto& action : task.actions) {
-        if (action.designated_events.size() > 1)
-            return true;
-    }
-
-    return false;
-}
-
-static int goal_modal_depth(const Formula& f) {
-    switch (f.kind) {
-
-        case FormulaKind::Belief:
-        case FormulaKind::Common:
-        case FormulaKind::Kw:
-            return 1 + goal_modal_depth(*f.children[0]);
-
-        case FormulaKind::And:
-        case FormulaKind::Or: {
-            int d = 0;
-
-            for (auto& c : f.children)
-                d = std::max(d, goal_modal_depth(*c));
-
-            return d;
-        }
-
-        default:
-            return 0;
-    }
-}
-
-static Strategy select_strategy(const PlanningTask& task,
-                                const std::string& heuristic_name) {
-
-    bool sensing =
-        has_sensing_actions(task);
-
-    int depth =
-        goal_modal_depth(*task.goal);
-
-    size_t designated =
-        task.init.designated.size();
-
-    size_t worlds =
-        task.init.worlds.size();
-
-    size_t actions =
-        task.actions.size();
-
-    bool ed =
-        heuristic_name == "ed";
-
-    if (sensing) {
-        if (ed && designated <= 16)
-            return Strategy::AOSTAR;
-
-        if (depth >= 2 && designated <= 32)
-            return Strategy::AOSTAR;
-
-        if (designated <= 8 && actions <= 32)
-            return Strategy::AOSTAR;
-
-        return Strategy::GBFS;
-    }
-
-    // KD45 belief domains with few worlds but many ground actions:
-    // the action count reflects grounding fanout, not branching depth.
-    // AO* with ranked actions handles this better than GBFS thrashing.
-    if (task.kd45 && worlds <= 8 && designated <= 4 && depth >= 1)
-        return Strategy::AOSTAR;
-
-    // EHC is prone to deep plateaus under KD45; the BFS escape can exhaust
-    // the budget before finding the improving frontier in multi-agent belief tasks.
-    if (!task.kd45 &&
-        designated <= 4 &&
-        worlds <= 16 &&
-        actions <= 12 &&
-        depth <= 1)
-    {
-        return Strategy::EHC;
-    }
-
-    if (worlds > 16)
-        return Strategy::GBFS;
-
-    if (actions > 12)
-        return Strategy::GBFS;
-
-    return Strategy::EHC;
-}
-
-static const char* strategy_name(Strategy s) {
-    switch (s) {
-
-        case Strategy::AOSTAR:
-            return "AO* (conditional, auto-selected)";
-
-        case Strategy::EHC:
-            return "EHC (enforced hill climbing, auto-selected)";
-
-        default:
-            return "GBFS (auto-selected)";
-    }
-}
-
-static void usage(const char* prog) {
-    std::cerr
-        << "Usage:\n"
-        << "  " << prog
-        << " --task <task.json> --plan <plan.json> [options]\n"
-        << "\n"
-        << "Options:\n"
-        << "  --task         Path to grounded JSON task\n"
-        << "  --plan         Output plan file\n"
-        << "  --heuristic    ug | ed | ks | wc\n"
-        << "  --limit        Max nodes / max depth (0 = unlimited)\n"
-        << "  --timeout      Timeout in seconds (AO* only)\n"
-        << "  --ehc          Force EHC\n"
-        << "  --gbfs         Force GBFS\n"
-        << "  --conditional  Force AO*\n"
-        << "  --help         Show this message\n";
-}
-
-int main(int argc, char* argv[]) {
-
-    std::string task_path;
-    std::string plan_path;
-
-    std::string heuristic_name = "ug";
-
-    size_t limit = 0;
-    size_t timeout_secs = 0;
-
-    bool force_conditional = false;
-    bool force_ehc = false;
-    bool force_gbfs = false;
-
-    for (int i = 1; i < argc; i++) {
-
-        std::string arg = argv[i];
-
-        if (arg == "--task" && i + 1 < argc) {
-            task_path = argv[++i];
-        }
-
-        else if (arg == "--plan" && i + 1 < argc) {
-            plan_path = argv[++i];
-        }
-
-        else if (arg == "--heuristic" && i + 1 < argc) {
-            heuristic_name = argv[++i];
-        }
-
-        else if (arg == "--limit" && i + 1 < argc) {
-            limit = static_cast<size_t>(std::stoul(argv[++i]));
-        }
-
-        else if (arg == "--timeout" && i + 1 < argc) {
-            timeout_secs = static_cast<size_t>(std::stoul(argv[++i]));
-        }
-
-        else if (arg == "--conditional") {
-            force_conditional = true;
-        }
-
-        else if (arg == "--ehc") {
-            force_ehc = true;
-        }
-
-        else if (arg == "--gbfs") {
-            force_gbfs = true;
-        }
-
-        else if (arg == "--help" || arg == "-h") {
-            usage(argv[0]);
-            return 0;
-        }
-
-        else {
-            std::cerr << "Unknown argument: " << arg << "\n";
-            usage(argv[0]);
-            return 1;
-        }
-    }
-
-    if (task_path.empty() || plan_path.empty()) {
-        std::cerr << "Error: --task and --plan are required.\n";
-        usage(argv[0]);
-        return 1;
-    }
+    json j;
+    f >> j;
 
     PlanningTask task;
 
-    try {
-        task = load_task(task_path);
-    }
-
-    catch (const std::exception& e) {
-        std::cerr << "Error loading task: " << e.what() << "\n";
-        return 1;
-    }
-
-    std::unique_ptr<Heuristic> h;
-
-    if (heuristic_name == "ug") {
-        h = std::make_unique<UnsatisfiedGoalHeuristic>();
-        std::cerr << "[main] Heuristic: unsatisfied-goal\n";
-    }
-
-    else if (heuristic_name == "ed") {
-        h = std::make_unique<EpistemicDistanceHeuristic>();
-        std::cerr << "[main] Heuristic: epistemic-distance\n";
-    }
-
-    else if (heuristic_name == "ks") {
-        h = std::make_unique<KnowledgeSpreadHeuristic>();
-        std::cerr << "[main] Heuristic: knowledge-spread\n";
-    }
-
-    else {
-        h = std::make_unique<WorldCountHeuristic>();
-        std::cerr << "[main] Heuristic: world-count\n";
-    }
-
-    Strategy strategy;
-
-    if (force_conditional)
-        strategy = Strategy::AOSTAR;
-
-    else if (force_ehc)
-        strategy = Strategy::EHC;
-
-    else if (force_gbfs)
-        strategy = Strategy::GBFS;
-
-    else {
-        strategy =
-            select_strategy(
-                task,
-                heuristic_name
-            );
-
-        std::cerr << "[main] Strategy: "
-                  << strategy_name(strategy) << "\n";
-    }
-
-    using Clock = std::chrono::steady_clock;
-    using TimePoint = Clock::time_point;
-
-    TimePoint deadline =
-        timeout_secs > 0
-        ? Clock::now() + std::chrono::seconds(timeout_secs)
-        : TimePoint::max();
-
-    // Reserve a GBFS fallback deadline from the same wall-clock budget so
-    // the combined AO* + fallback run never overshoots the original timeout.
-    TimePoint gbfs_fallback_deadline =
-        timeout_secs > 0
-        ? Clock::now() + std::chrono::seconds(timeout_secs)
-        : TimePoint::max();
-
-    std::ofstream out(plan_path);
-
-    if (!out.is_open()) {
-        std::cerr << "Error: cannot open output file: "
-                  << plan_path << "\n";
-        return 1;
-    }
-
-    if (strategy == Strategy::AOSTAR) {
-
-        std::cerr << "[main] Mode: AO*\n";
-
-        auto result =
-            aostar::search(task, *h, limit, deadline);
-
-        if (!result) {
-            // AO* timed out or proved unsolvable within the depth/time budget.
-            // For domains that have a conformant linear solution, GBFS can
-            // recover without needing the conditional structure.
-            std::cerr << "[main] AO* failed — falling back to GBFS\n";
-
-            size_t remaining_secs = 0;
-            if (timeout_secs > 0) {
-                auto elapsed = Clock::now() - (gbfs_fallback_deadline -
-                               std::chrono::seconds(timeout_secs));
-                auto elapsed_s =
-                    std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-                remaining_secs =
-                    elapsed_s < static_cast<long long>(timeout_secs)
-                    ? timeout_secs - static_cast<size_t>(elapsed_s)
-                    : 0;
+    // Read requirements to detect KD45 (doxastic/belief) vs S5 (knowledge) frame.
+    // plank exports requirements as a list of strings under "requirements".
+    // KD45 is indicated by ":kd45" or ":belief"; S5 by ":s5" or ":knowledge".
+    // If requirements are absent or neither flag is found, default to S5 (conservative).
+    task.kd45 = false;
+    if (j.contains("planning-task-info")) {
+        auto& pti = j.at("planning-task-info");
+        if (pti.contains("requirements")) {
+            for (auto& req : pti.at("requirements")) {
+                std::string r = req.get<std::string>();
+                if (r == ":kd45" || r == ":KD45-frames" || r == ":belief" || r == ":doxastic") {
+                    task.kd45 = true;
+                    break;
+                }
             }
+        }
+    }
 
-            TimePoint gbfs_deadline =
-                remaining_secs > 0
-                ? Clock::now() + std::chrono::seconds(remaining_secs)
-                : gbfs_fallback_deadline;
 
-            auto gbfs_result = gbfs::search(task, *h, limit);
-
-            if (gbfs_result) {
-                write_linear_plan(out, *gbfs_result);
-                std::cerr << "[main] Plan written to " << plan_path << "\n";
-                return 0;
+    if (!task.kd45 && j.contains("requirements")) {
+        for (auto& req : j.at("requirements")) {
+            std::string r = req.get<std::string>();
+            if (r == ":kd45" || r == ":KD45-frames" || r == ":belief" || r == ":doxastic") {
+                task.kd45 = true;
+                break;
             }
-
-            out << "null\n";
-            std::cerr << "[main] No solution found.\n";
-            return 0;
-        }
-
-        write_plan_tree(out, result->plan_tree);
-        out << "\n";
-
-        std::cerr
-            << "[main] Conditional plan written to "
-            << plan_path << "\n";
-
-        auto vr = validate(task, result->plan_tree);
-
-        if (vr.valid) {
-            std::cerr
-                << "[validator] OK — "
-                << vr.leaves_reached << " leaves, "
-                << vr.branches_checked << " branches checked\n";
-        }
-
-        else {
-            std::cerr
-                << "[validator] FAILED — "
-                << vr.error << "\n";
         }
     }
 
-    else if (strategy == Strategy::EHC) {
+    std::cerr << "[parser] Frame: " << (task.kd45 ? "KD45 (belief)" : "S5 (knowledge)") << "\n";
 
-        std::cerr << "[main] Mode: EHC\n";
-
-        auto result =
-            ehc::search(task, *h, limit);
-
-        if (!result) {
-            std::cerr
-                << "[main] EHC failed — falling back to GBFS\n";
-
-            result = gbfs::search(task, *h, limit);
-        }
-
-        if (!result) {
-            out << "null\n";
-            std::cerr << "[main] No solution found.\n";
-            return 0;
-        }
-
-        write_linear_plan(out, *result);
-
-        std::cerr
-            << "[main] Plan written to "
-            << plan_path << "\n";
+    for (auto& a : j.at("language").at("atoms")) {
+        std::string name = a.get<std::string>();
+        task.atom_index[name] = static_cast<AtomIdx>(task.atom_names.size());
+        task.atom_names.push_back(name);
     }
 
-    else {
-
-        std::cerr << "[main] Mode: GBFS\n";
-
-        auto result =
-            gbfs::search(task, *h, limit);
-
-        if (!result) {
-            out << "null\n";
-            std::cerr << "[main] No solution found.\n";
-            return 0;
-        }
-
-        write_linear_plan(out, *result);
-
-        std::cerr
-            << "[main] Plan written to "
-            << plan_path << "\n";
+    for (auto& a : j.at("language").at("agents")) {
+        std::string name = a.get<std::string>();
+        task.agent_index[name] = static_cast<AgentIdx>(task.agent_names.size());
+        task.agent_names.push_back(name);
     }
 
-    return 0;
+    size_t na = task.num_agents();
+
+    auto& is = j.at("initial-state");
+
+    std::unordered_map<std::string, WorldIdx> world_idx;
+
+    {
+        WorldIdx idx = 0;
+        for (auto& w : is.at("worlds")) {
+            std::string wname = w.get<std::string>();
+            world_idx[wname] = idx++;
+
+            World world_obj;
+            world_obj.id = world_idx[wname];
+            task.init.worlds.push_back(std::move(world_obj));
+        }
+    }
+
+    size_t nw = task.init.worlds.size();
+
+    for (auto& [wname, atoms] : is.at("labels").items()) {
+        auto it = world_idx.find(wname);
+        if (it == world_idx.end()) continue;
+
+        WorldIdx wi = it->second;
+        for (auto& a : atoms) {
+            std::string aname = a.get<std::string>();
+            auto ait = task.atom_index.find(aname);
+            if (ait != task.atom_index.end())
+                task.init.worlds[wi].atoms.insert(ait->second);
+        }
+    }
+
+    for (auto& d : is.at("designated")) {
+        std::string wname = d.get<std::string>();
+        auto it = world_idx.find(wname);
+        if (it != world_idx.end())
+            task.init.designated.insert(it->second);
+    }
+
+    task.init.accessibility.resize(na, Relation(nw));
+    task.init.num_agents = na;
+
+    for (auto& [agent_name, rows] : is.at("relations").items()) {
+        auto ait = task.agent_index.find(agent_name);
+        if (ait == task.agent_index.end()) continue;
+
+        AgentIdx ag = ait->second;
+
+        for (auto& [src_wname, targets] : rows.items()) {
+            auto sit = world_idx.find(src_wname);
+            if (sit == world_idx.end()) continue;
+
+            WorldIdx src = sit->second;
+
+            for (auto& t : targets) {
+                std::string twname = t.get<std::string>();
+                auto tit = world_idx.find(twname);
+                if (tit != world_idx.end())
+                    task.init.accessibility[ag][src].insert(tit->second);
+            }
+        }
+    }
+
+    for (auto& [action_name, a_j] : j.at("actions").items()) {
+        Action act;
+        act.name       = action_name;
+        act.num_agents = na;
+
+        std::unordered_map<std::string, EventIdx> event_idx;
+
+        for (auto& e : a_j.at("events")) {
+            std::string ename = e.get<std::string>();
+            EventIdx eid = static_cast<EventIdx>(act.events.size());
+
+            event_idx[ename] = eid;
+
+            Event ev;
+            ev.id   = eid;
+            ev.name = ename;
+            ev.is_nil = (ename == "nil");
+            ev.precondition = Formula::make_top();
+
+            act.events.push_back(std::move(ev));
+        }
+
+        size_t ne = act.events.size();
+
+        if (a_j.contains("preconditions")) {
+            for (auto& [ename, pre_j] : a_j.at("preconditions").items()) {
+                auto it = event_idx.find(ename);
+                if (it == event_idx.end()) continue;
+
+                act.events[it->second].precondition =
+                    unwrap_formula(pre_j, task.atom_index, task.agent_index);
+            }
+        }
+
+        if (a_j.contains("effects")) {
+            for (auto& [ename, eff_j] : a_j.at("effects").items()) {
+                auto it = event_idx.find(ename);
+                if (it == event_idx.end() || eff_j.is_null()) continue;
+
+                Event& ev = act.events[it->second];
+
+                for (auto& [atom_name, val_j] : eff_j.items()) {
+                    auto ait = task.atom_index.find(atom_name);
+                    if (ait == task.atom_index.end()) continue;
+
+                    AtomIdx atom = ait->second;
+
+                    FormulaPtr cond =
+                        unwrap_formula(val_j, task.atom_index, task.agent_index);
+
+                    if (cond->kind == FormulaKind::Top) {
+                        ev.post_true[atom] = Formula::make_top();
+                    } else if (cond->kind == FormulaKind::Bot) {
+                        ev.post_false[atom] = Formula::make_top();
+                    } else {
+                        ev.post_true[atom]  = cond;
+                        ev.post_false[atom] = Formula::make_not(cond);
+                    }
+                }
+            }
+        }
+
+        for (auto& d : a_j.at("designated")) {
+            std::string ename = d.get<std::string>();
+            auto it = event_idx.find(ename);
+            if (it != event_idx.end())
+                act.designated_events.insert(it->second);
+        }
+
+        // Build obs_type_rel: obs_type_name -> event relation
+        std::unordered_map<std::string,
+            std::vector<std::unordered_set<EventIdx>>> obs_type_rel;
+
+        if (a_j.contains("relations")) {
+            for (auto& [obs_type, rel_j] : a_j.at("relations").items()) {
+                std::vector<std::unordered_set<EventIdx>> rel(ne);
+
+                for (auto& [src_ename, targets] : rel_j.items()) {
+                    auto sit = event_idx.find(src_ename);
+                    if (sit == event_idx.end()) continue;
+
+                    for (auto& t : targets) {
+                        std::string tname = t.get<std::string>();
+                        auto tit = event_idx.find(tname);
+                        if (tit != event_idx.end())
+                            rel[sit->second].insert(tit->second);
+                    }
+                }
+
+                obs_type_rel[obs_type] = std::move(rel);
+            }
+        }
+
+        // Collect all observability cases per agent
+        act.obs_cases.resize(na);
+
+        if (a_j.contains("observability-conditions")) {
+            for (auto& [agent_name, obs_j] : a_j.at("observability-conditions").items()) {
+                auto ait = task.agent_index.find(agent_name);
+                if (ait == task.agent_index.end()) continue;
+
+                AgentIdx ag = ait->second;
+
+                for (auto& [obs_type, cond_j] : obs_j.items()) {
+                    auto rit = obs_type_rel.find(obs_type);
+                    if (rit == obs_type_rel.end()) continue;
+
+                    ObsCase oc;
+                    oc.condition = unwrap_formula(cond_j, task.atom_index, task.agent_index);
+                    oc.relation  = rit->second;
+                    act.obs_cases[ag].push_back(std::move(oc));
+                }
+            }
+        }
+
+        task.action_index[act.name] =
+            static_cast<ActionIdx>(task.actions.size());
+
+        task.actions.push_back(std::move(act));
+    }
+
+    task.goal =
+        unwrap_formula(j.at("goal"), task.atom_index, task.agent_index);
+
+    // Detect partial observability.
+    //
+    // A domain has partial observability iff at least one action assigns
+    // different observability cases to different agents — i.e. some agents
+    // are Fully observable while others are Oblivious or have conditional
+    // cases. We detect this by checking whether any action has obs_cases
+    // entries that differ across agents (non-empty obs_cases for at least
+    // two agents with different case counts, or any agent with >0 cases that
+    // maps an event to a non-identity relation).
+    //
+    // The conservative proxy used here: partial_obs = true iff any action
+    // has at least two agents whose obs_cases list sizes differ. This catches
+    // all known partial-obs benchmarks (Gossip, Grapevine, AMC) without
+    // requiring us to inspect the actual event relations.
+    task.partial_obs = false;
+    for (auto& act : task.actions) {
+        if (act.obs_cases.empty()) continue;
+        size_t first_size = act.obs_cases[0].size();
+        for (size_t ag = 1; ag < act.obs_cases.size(); ag++) {
+            if (act.obs_cases[ag].size() != first_size) {
+                task.partial_obs = true;
+                break;
+            }
+        }
+        if (task.partial_obs) break;
+    }
+
+    // Detect Kw-only goal.
+    //
+    // A goal is Kw-only if it is a single Kw formula or a conjunction where
+    // every top-level conjunct is a Kw formula (FormulaKind::Kw, or an Or of
+    // two Belief formulas that the parser expands Kw into). We check the
+    // top-level structure only — deeper nesting is handled by the heuristic.
+    // has_atom_conjunct (defined in heuristic.hpp) returns true iff the formula
+    // has any bare atom at the top level, so goal_kw_only = !has_atom_conjunct.
+    task.goal_kw_only = task.goal && !has_atom_conjunct(*task.goal);
+
+    std::cerr << "[parser] Loaded: "
+              << task.num_atoms()   << " atoms, "
+              << task.num_agents()  << " agents, "
+              << task.init.worlds.size() << " worlds ("
+              << task.init.designated.size() << " designated), "
+              << task.num_actions() << " actions"
+              << "  partial_obs=" << task.partial_obs
+              << "  goal_kw_only=" << task.goal_kw_only
+              << "\n";
+
+    return task;
 }
