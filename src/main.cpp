@@ -119,30 +119,29 @@ static Strategy select_strategy(const PlanningTask& task,
     bool ed =
         heuristic_name == "ed";
 
-    // Small sensing domains are exactly what AO* handles best.
-    // Coin, muddy children, etc.
     if (sensing) {
-
-        // epistemic-distance heuristic is intended for conditional planning
         if (ed && designated <= 16)
             return Strategy::AOSTAR;
 
-        // nested epistemic goals require branching reasoning
         if (depth >= 2 && designated <= 32)
             return Strategy::AOSTAR;
 
-        // sensing domains
         if (designated <= 8 && actions <= 32)
             return Strategy::AOSTAR;
 
-        // large sensing spaces
         return Strategy::GBFS;
     }
 
-    // Non-sensing domains
+    // KD45 belief domains with few worlds but many ground actions:
+    // the action count reflects grounding fanout, not branching depth.
+    // AO* with ranked actions handles this better than GBFS thrashing.
+    if (task.kd45 && worlds <= 8 && designated <= 4 && depth >= 1)
+        return Strategy::AOSTAR;
 
-    // Tiny deterministic tasks
-    if (designated <= 4 &&
+    // EHC is prone to deep plateaus under KD45; the BFS escape can exhaust
+    // the budget before finding the improving frontier in multi-agent belief tasks.
+    if (!task.kd45 &&
+        designated <= 4 &&
         worlds <= 16 &&
         actions <= 12 &&
         depth <= 1)
@@ -150,11 +149,9 @@ static Strategy select_strategy(const PlanningTask& task,
         return Strategy::EHC;
     }
 
-    // Large state spaces favor GBFS
     if (worlds > 16)
         return Strategy::GBFS;
 
-    // Many actions -> GBFS
     if (actions > 12)
         return Strategy::GBFS;
 
@@ -324,6 +321,13 @@ int main(int argc, char* argv[]) {
         ? Clock::now() + std::chrono::seconds(timeout_secs)
         : TimePoint::max();
 
+    // Reserve a GBFS fallback deadline from the same wall-clock budget so
+    // the combined AO* + fallback run never overshoots the original timeout.
+    TimePoint gbfs_fallback_deadline =
+        timeout_secs > 0
+        ? Clock::now() + std::chrono::seconds(timeout_secs)
+        : TimePoint::max();
+
     std::ofstream out(plan_path);
 
     if (!out.is_open()) {
@@ -340,6 +344,36 @@ int main(int argc, char* argv[]) {
             aostar::search(task, *h, limit, deadline);
 
         if (!result) {
+            // AO* timed out or proved unsolvable within the depth/time budget.
+            // For domains that have a conformant linear solution, GBFS can
+            // recover without needing the conditional structure.
+            std::cerr << "[main] AO* failed — falling back to GBFS\n";
+
+            size_t remaining_secs = 0;
+            if (timeout_secs > 0) {
+                auto elapsed = Clock::now() - (gbfs_fallback_deadline -
+                               std::chrono::seconds(timeout_secs));
+                auto elapsed_s =
+                    std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+                remaining_secs =
+                    elapsed_s < static_cast<long long>(timeout_secs)
+                    ? timeout_secs - static_cast<size_t>(elapsed_s)
+                    : 0;
+            }
+
+            TimePoint gbfs_deadline =
+                remaining_secs > 0
+                ? Clock::now() + std::chrono::seconds(remaining_secs)
+                : gbfs_fallback_deadline;
+
+            auto gbfs_result = gbfs::search(task, *h, limit);
+
+            if (gbfs_result) {
+                write_linear_plan(out, *gbfs_result);
+                std::cerr << "[main] Plan written to " << plan_path << "\n";
+                return 0;
+            }
+
             out << "null\n";
             std::cerr << "[main] No solution found.\n";
             return 0;
