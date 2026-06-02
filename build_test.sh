@@ -1,203 +1,190 @@
 #!/usr/bin/env bash
-# build_and_test.sh — build aletheia and run the team-3 smoke-test suite
+# build_test.sh build aletheia and run the local benchmark suite
 #
 # Usage:
-#   ./build_and_test.sh [--repo <path>] [--logs <path>] [--jobs N] [--verbose]
+#   ./build_test.sh [--repo <path>] [--benchmarks <path>] [--logs <path>]
+#                       [--jobs N] [--timeout N] [--heuristic ed|ug|ks|wc]
+#                       [--verbose] [--no-build]
 #
-# Defaults:
-#   --repo    directory containing CMakeLists.txt  (default: script's own dir)
-#   --logs    where to write per-test .log files   (default: <repo>/smoke-logs)
-#   --jobs    parallel make jobs                   (default: nproc)
-#   --verbose stream planner stderr live instead of capturing it
+# Each subdirectory of benchmarks/ that contains a grounded task JSON
+# (identified by the "planning-task-info" key) is run as one test.
+# Folders with multiple task JSONs (e.g. amc1 has both amc-problem.json
+# and problem_1.json which are identical) are deduped — only the first
+# alphabetically is used.
 
 set -euo pipefail
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BOLD='\033[1m'; RESET='\033[0m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 die()  { echo -e "${RED}[fatal]${RESET} $*" >&2; exit 1; }
-info() { echo -e "${BOLD}[build_and_test]${RESET} $*"; }
-ok()   { echo -e "${GREEN}[PASS]${RESET} $1"; }
-fail() { echo -e "${RED}[FAIL]${RESET} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${RESET} $1"; }
-
-# ── argument parsing ──────────────────────────────────────────────────────────
+info() { echo -e "${BOLD}[aletheia]${RESET} $*"; }
+ok()   { echo -e "  ${GREEN}PASS${RESET}  $*"; }
+fail() { echo -e "  ${RED}FAIL${RESET}  $*"; }
+warn() { echo -e "  ${YELLOW}WARN${RESET}  $*"; }
+skip() { echo -e "  ${CYAN}SKIP${RESET}  $*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$SCRIPT_DIR"
+BENCHMARKS=""
 LOGS=""
 JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+TIMEOUT=120
+HEURISTIC="ed"
 VERBOSE=0
+NO_BUILD=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --repo)    REPO="$2";  shift 2 ;;
-        --logs)    LOGS="$2";  shift 2 ;;
-        --jobs)    JOBS="$2";  shift 2 ;;
-        --verbose) VERBOSE=1;  shift   ;;
+        --repo)        REPO="$2";       shift 2 ;;
+        --benchmarks)  BENCHMARKS="$2"; shift 2 ;;
+        --logs)        LOGS="$2";       shift 2 ;;
+        --jobs)        JOBS="$2";       shift 2 ;;
+        --timeout)     TIMEOUT="$2";    shift 2 ;;
+        --heuristic)   HEURISTIC="$2";  shift 2 ;;
+        --verbose)     VERBOSE=1;       shift   ;;
+        --no-build)    NO_BUILD=1;      shift   ;;
         *) die "unknown argument: $1" ;;
     esac
 done
 
 [[ -f "$REPO/CMakeLists.txt" ]] || die "CMakeLists.txt not found under $REPO"
 
+BENCHMARKS="${BENCHMARKS:-$REPO/benchmarks}"
 LOGS="${LOGS:-$REPO/smoke-logs}"
 BUILD="$REPO/build"
 PLANNER="$BUILD/epistemic_planner"
-ALETHEIA="$REPO/aletheia.sh"
-BENCHMARK="$REPO/benchmark"
 
-info "Configuring (cmake) …"
-cmake -B "$BUILD" -S "$REPO" \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-      2>&1 | sed 's/^/  [cmake] /'
+[[ -d "$BENCHMARKS" ]] || die "benchmarks directory not found: $BENCHMARKS"
 
-info "Building with $JOBS job(s) …"
-cmake --build "$BUILD" -j"$JOBS" 2>&1 | sed 's/^/  [make]  /'
+if [[ $NO_BUILD -eq 0 ]]; then
+    info "Configuring …"
+    cmake -B "$BUILD" -S "$REPO" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+          2>&1 | sed 's/^/  [cmake] /'
 
-[[ -x "$PLANNER" ]] || die "build finished but binary not found: $PLANNER"
-info "Binary ready: $PLANNER"
-echo ""
-
-
-[[ -d "$BENCHMARK" ]] || die "benchmark/ directory not found under $REPO"
-
-mapfile -t SMOKE_FILES < <(
-    find "$BENCHMARK" -name "smoke-test.epddl" | sort
-)
-
-[[ ${#SMOKE_FILES[@]} -gt 0 ]] || die "no smoke-test.epddl files found under $BENCHMARK"
-
-info "Found ${#SMOKE_FILES[@]} smoke test(s)"
-echo ""
-
-if ! command -v plank &>/dev/null; then
-    warn "'plank' not on PATH — plan-verification step will be skipped"
-    HAS_PLANK=0
-else
-    HAS_PLANK=1
+    info "Building ($JOBS jobs) …"
+    cmake --build "$BUILD" -j"$JOBS" 2>&1 | sed 's/^/  [make]  /'
 fi
+
+[[ -x "$PLANNER" ]] || die "binary not found: $PLANNER  (run without --no-build?)"
+info "Binary: $PLANNER"
+echo ""
+
+declare -a TASKS=()
+declare -a TASK_NAMES=() 
+
+for folder in $(find "$BENCHMARKS" -mindepth 1 -maxdepth 1 -type d | sort); do
+    name="$(basename "$folder")"
+    first=""
+    for f in $(ls "$folder"/*.json 2>/dev/null | sort); do
+        if grep -q '"planning-task-info"' "$f" 2>/dev/null; then
+            first="$f"
+            break
+        fi
+    done
+    if [[ -z "$first" ]]; then
+        skip "$name  (no grounded task JSON)"
+        continue
+    fi
+    TASKS+=("$first")
+    TASK_NAMES+=("$name")
+done
+
+echo ""
+info "Found ${#TASKS[@]} benchmark(s)"
+echo ""
 
 mkdir -p "$LOGS"
 
-PASS=0; FAIL=0; SKIP=0
+PASS=0; FAIL=0; TOTAL=0
 declare -a FAILED_NAMES=()
 
-for SMOKE in "${SMOKE_FILES[@]}"; do
-    PROB_DIR="$(dirname "$SMOKE")"
-    DOMAIN="$(dirname "$PROB_DIR")/domain.epddl"
-    REL="$(realpath --relative-to="$BENCHMARK" "$SMOKE")"
+for i in "${!TASKS[@]}"; do
+    TASK="${TASKS[$i]}"
+    NAME="${TASK_NAMES[$i]}"
+    LOG="$LOGS/${NAME}.log"
+    PLAN="$(mktemp /tmp/aletheia-plan-XXXXXX.json)"
 
-    if [[ ! -f "$DOMAIN" ]]; then
-        DOMAIN="$(dirname "$(dirname "$PROB_DIR")")/domain.epddl"
-    fi
+    (( TOTAL++ )) || true
+    printf "  %-28s  " "$NAME"
 
-    if [[ ! -f "$DOMAIN" ]]; then
-        warn "domain not found for $REL — skipping"
-        (( SKIP++ )) || true
-        continue
-    fi
+    START=$(date +%s%N)
 
-    SAFE_NAME="${REL//\//_}"
-    SAFE_NAME="${SAFE_NAME%.epddl}"
-    LOG="$LOGS/${SAFE_NAME}.log"
-    TASK_JSON="$(mktemp /tmp/aletheia-task-XXXXXX.json)"
-    PLAN_JSON="$(mktemp /tmp/aletheia-plan-XXXXXX.json)"
-
-
-    GROUND_OK=0
-    if [[ $HAS_PLANK -eq 1 ]]; then
-        if plank "$SMOKE" --output-json "$TASK_JSON" &>"$LOG" 2>&1; then
-            GROUND_OK=1
-        fi
+    if [[ $VERBOSE -eq 1 ]]; then
+        "$PLANNER" \
+            --task      "$TASK" \
+            --plan      "$PLAN" \
+            --heuristic "$HEURISTIC" \
+            --timeout   "$TIMEOUT" \
+            2>&1 | tee "$LOG"
     else
-        GROUND_OK=2
+        "$PLANNER" \
+            --task      "$TASK" \
+            --plan      "$PLAN" \
+            --heuristic "$HEURISTIC" \
+            --timeout   "$TIMEOUT" \
+            > "$LOG" 2>&1 || true
     fi
 
-
-    printf "  %-60s " "$REL"
-
-    if [[ $GROUND_OK -eq 2 ]]; then
-        if [[ $VERBOSE -eq 1 ]]; then
-            "$ALETHEIA" "$SMOKE" "$PLAN_JSON" --heuristic ed --timeout 120 \
-                2>&1 | tee -a "$LOG"
-        else
-            "$ALETHEIA" "$SMOKE" "$PLAN_JSON" --heuristic ed --timeout 120 \
-                >> "$LOG" 2>&1
-        fi
-        EXIT_CODE=$?
-    elif [[ $GROUND_OK -eq 1 ]]; then
-        if [[ $VERBOSE -eq 1 ]]; then
-            "$PLANNER" --task "$TASK_JSON" --plan "$PLAN_JSON" \
-                --heuristic ed --timeout 120 \
-                2>&1 | tee -a "$LOG"
-        else
-            "$PLANNER" --task "$TASK_JSON" --plan "$PLAN_JSON" \
-                --heuristic ed --timeout 120 \
-                >> "$LOG" 2>&1
-        fi
-        EXIT_CODE=$?
-    else
-        warn "grounding failed for $REL"
-        (( SKIP++ )) || true
-        rm -f "$TASK_JSON" "$PLAN_JSON"
-        continue
-    fi
+    END=$(date +%s%N)
+    ELAPSED=$(( (END - START) / 1000000 ))
 
 
     PLAN_CONTENT=""
-    [[ -f "$PLAN_JSON" ]] && PLAN_CONTENT="$(cat "$PLAN_JSON")"
+    [[ -f "$PLAN" ]] && PLAN_CONTENT="$(cat "$PLAN")"
+
+    STRATEGY=$(grep -oP '\[main\] Strategy: \K.*' "$LOG" | head -1)
+    FALLBACK=$(grep -oP '\[main\] .*falling back.*' "$LOG" | head -1 || true)
+    DEPTH=$(grep -oP '(?:depth |Trying depth )\K[0-9]+' "$LOG" | tail -1 || true)
+    EXPANDED=$(grep -oP 'Expanded=\K[0-9]+' "$LOG" | tail -1 || true)
+    TIMEOUT_HIT=$(grep -c 'TIMEOUT' "$LOG" 2>/dev/null || echo 0)
+
+    STATS=""
+    [[ -n "$DEPTH" ]]    && STATS="${STATS} depth=${DEPTH}"
+    [[ -n "$EXPANDED" ]] && STATS="${STATS} exp=${EXPANDED}"
+    STATS="${STATS} (${ELAPSED}ms)"
 
     if [[ "$PLAN_CONTENT" == "null" || -z "$PLAN_CONTENT" ]]; then
-        fail "$REL"
-        (( FAIL++ )) || true
-        FAILED_NAMES+=("$REL  →  no plan (null)")
-    else
-        VERIFIED=1
-        if [[ $HAS_PLANK -eq 1 && $GROUND_OK -eq 1 ]]; then
-            if ! plank "$SMOKE" --verify-plan "$PLAN_JSON" >> "$LOG" 2>&1; then
-                VERIFIED=0
-            fi
-        fi
-
-        if [[ $VERIFIED -eq 1 ]]; then
-            DEPTH=$(grep -oP 'depth \K[0-9]+' "$LOG" | tail -1)
-            EXPANDED=$(grep -oP 'Expanded=\K[0-9]+' "$LOG" | tail -1)
-            EXTRA=""
-            [[ -n "$DEPTH" ]]    && EXTRA=" depth=$DEPTH"
-            [[ -n "$EXPANDED" ]] && EXTRA="$EXTRA expanded=$EXPANDED"
-            ok "$REL$EXTRA"
-            (( PASS++ )) || true
+        echo -e "${RED}FAIL${RESET}  ${NAME}${STATS}"
+        if [[ $TIMEOUT_HIT -gt 0 ]]; then
+            echo "        → timeout"
         else
-            fail "$REL  (plan found but validator rejected it)"
-            (( FAIL++ )) || true
-            FAILED_NAMES+=("$REL  →  invalid plan")
+            LAST=$(tail -3 "$LOG" | tr '\n' ' ')
+            echo "        → $LAST"
         fi
+        (( FAIL++ )) || true
+        FAILED_NAMES+=("$NAME")
+    else
+        if echo "$PLAN_CONTENT" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if isinstance(d,dict) and 'action' in d else 1)" 2>/dev/null; then
+            PLAN_TYPE="conditional"
+        else
+            N=$(echo "$PLAN_CONTENT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "?")
+            PLAN_TYPE="linear(${N})"
+        fi
+        echo -e "${GREEN}PASS${RESET}  ${NAME}  [${PLAN_TYPE}]${STATS}"
+        (( PASS++ )) || true
     fi
 
-    rm -f "$TASK_JSON" "$PLAN_JSON"
+    rm -f "$PLAN"
 done
 
-
 echo ""
-echo "----------------------------------------------------------------"
-TOTAL=$(( PASS + FAIL + SKIP ))
-echo -e "  Results: ${GREEN}${PASS} passed${RESET}  ${RED}${FAIL} failed${RESET}  ${YELLOW}${SKIP} skipped${RESET}  /  ${TOTAL} total"
-echo ""
+echo "---------------------------------------------------------------------"
+echo -e "  ${GREEN}${PASS} passed${RESET}   ${RED}${FAIL} failed${RESET}   ${TOTAL} total"
 
 if [[ ${#FAILED_NAMES[@]} -gt 0 ]]; then
-    echo -e "  ${RED}Failed tests:${RESET}"
-    for name in "${FAILED_NAMES[@]}"; do
-        echo "    • $name"
-    done
     echo ""
+    echo -e "  ${RED}Failed:${RESET}"
+    for n in "${FAILED_NAMES[@]}"; do
+        echo "    • $n  →  $LOGS/${n}.log"
+    done
 fi
 
-echo "  Logs written to: $LOGS"
-echo "----------------------------------------------------------------"
+echo ""
+echo "  Logs: $LOGS"
+echo "---------------------------------------------------------------------"
 echo ""
 
 [[ $FAIL -eq 0 ]]

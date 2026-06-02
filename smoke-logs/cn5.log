@@ -1,0 +1,10 @@
+[parser] Frame: S5 (knowledge)
+[parser] Loaded: 48 atoms, 2 agents, 5 worlds (2 designated), 2 actions.
+[main] Heuristic: epistemic-distance
+[main] Strategy: EHC (enforced hill climbing, auto-selected)
+[main] Mode: EHC
+[ehc] Plateau at h=0.333333  BFS escape...
+[ehc] BFS escape exhausted  no solution.
+[main] EHC failed — falling back to GBFS
+[gbfs] Search exhausted  no solution.
+[main] No solution found.

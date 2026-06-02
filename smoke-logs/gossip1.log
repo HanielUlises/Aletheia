@@ -1,0 +1,5 @@
+[parser] Frame: S5 (knowledge)
+[parser] Loaded: 5 atoms, 5 agents, 32 worlds (1 designated), 20 actions.
+[main] Heuristic: epistemic-distance
+[main] Strategy: GBFS (auto-selected)
+[main] Mode: GBFS

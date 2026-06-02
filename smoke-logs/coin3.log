@@ -1,0 +1,14 @@
+[parser] Frame: S5 (knowledge)
+[parser] Loaded: 8 atoms, 3 agents, 2 worlds (1 designated), 21 actions.
+[main] Heuristic: epistemic-distance
+[main] Strategy: AO* (conditional, auto-selected)
+[main] Mode: AO*
+[aostar] Trying depth 0
+[aostar] Trying depth 1
+[aostar] Trying depth 2
+[aostar] Trying depth 3
+[aostar] Trying depth 4
+[aostar] Trying depth 5
+[aostar] Solution found at depth 5  Expanded=243  Generated=237
+[main] Conditional plan written to /tmp/aletheia-plan-3tXZz9.json
+[validator] OK — 1 leaves, 5 branches checked
