@@ -1,0 +1,455 @@
+{
+  "planning-task-info": {
+    "problem": "cn-5",
+    "domain": "consecutive-numbers",
+    "libraries": [
+      "intermediate"
+    ],
+    "requirements": [
+      ":common-knowledge",
+      ":disjunctive-list-formulas",
+      ":disjunctive-preconditions",
+      ":equality",
+      ":events-conditions",
+      ":existential-preconditions",
+      ":facts",
+      ":finitary-S5-theories",
+      ":general-preconditions",
+      ":group-modalities",
+      ":knowing-whether",
+      ":list-comprehensions",
+      ":lists",
+      ":modal-goals",
+      ":modal-preconditions",
+      ":multi-pointed-models",
+      ":negative-list-formulas",
+      ":negative-preconditions",
+      ":partial-observability",
+      ":quantified-preconditions",
+      ":static-common-knowledge",
+      ":typing",
+      ":universal-preconditions"
+    ],
+    "agents-number": 2,
+    "atoms-number": 48,
+    "facts-number": 10,
+    "actions-number": 2,
+    "initial-worlds-number": 5,
+    "goal-modal-depth": 2,
+    "goal-size": 3
+  },
+  "language": {
+    "atoms": [
+      "consecutive_n0_n0",
+      "consecutive_n0_n2",
+      "consecutive_n0_n4",
+      "consecutive_n0_n1",
+      "consecutive_n0_n3",
+      "consecutive_n0_n5",
+      "consecutive_n2_n0",
+      "consecutive_n2_n2",
+      "consecutive_n2_n4",
+      "consecutive_n2_n1",
+      "consecutive_n2_n3",
+      "consecutive_n2_n5",
+      "consecutive_n4_n0",
+      "consecutive_n4_n2",
+      "consecutive_n4_n4",
+      "consecutive_n4_n1",
+      "consecutive_n4_n3",
+      "consecutive_n4_n5",
+      "consecutive_n1_n0",
+      "consecutive_n1_n2",
+      "consecutive_n1_n4",
+      "consecutive_n1_n1",
+      "consecutive_n1_n3",
+      "consecutive_n1_n5",
+      "consecutive_n3_n0",
+      "consecutive_n3_n2",
+      "consecutive_n3_n4",
+      "consecutive_n3_n1",
+      "consecutive_n3_n3",
+      "consecutive_n3_n5",
+      "consecutive_n5_n0",
+      "consecutive_n5_n2",
+      "consecutive_n5_n4",
+      "consecutive_n5_n1",
+      "consecutive_n5_n3",
+      "consecutive_n5_n5",
+      "has_A_n0",
+      "has_A_n2",
+      "has_A_n4",
+      "has_A_n1",
+      "has_A_n3",
+      "has_A_n5",
+      "has_B_n0",
+      "has_B_n2",
+      "has_B_n4",
+      "has_B_n1",
+      "has_B_n3",
+      "has_B_n5"
+    ],
+    "agents": [
+      "A",
+      "B"
+    ]
+  },
+  "facts": [
+    "consecutive_n0_n1",
+    "consecutive_n1_n0",
+    "consecutive_n1_n2",
+    "consecutive_n2_n1",
+    "consecutive_n2_n3",
+    "consecutive_n3_n2",
+    "consecutive_n3_n4",
+    "consecutive_n4_n3",
+    "consecutive_n4_n5",
+    "consecutive_n5_n4"
+  ],
+  "initial-state": {
+    "worlds": [
+      "w0",
+      "w1",
+      "w2",
+      "w3",
+      "w4"
+    ],
+    "relations": {
+      "A": {
+        "w0": [
+          "w0"
+        ],
+        "w1": [
+          "w1",
+          "w2"
+        ],
+        "w2": [
+          "w1",
+          "w2"
+        ],
+        "w3": [
+          "w3",
+          "w4"
+        ],
+        "w4": [
+          "w3",
+          "w4"
+        ]
+      },
+      "B": {
+        "w0": [
+          "w0",
+          "w1"
+        ],
+        "w1": [
+          "w0",
+          "w1"
+        ],
+        "w2": [
+          "w2",
+          "w3"
+        ],
+        "w3": [
+          "w2",
+          "w3"
+        ],
+        "w4": [
+          "w4"
+        ]
+      }
+    },
+    "labels": {
+      "w0": [
+        "consecutive_n0_n1",
+        "consecutive_n2_n1",
+        "consecutive_n2_n3",
+        "consecutive_n4_n3",
+        "consecutive_n4_n5",
+        "consecutive_n1_n0",
+        "consecutive_n1_n2",
+        "consecutive_n3_n2",
+        "consecutive_n3_n4",
+        "consecutive_n5_n4",
+        "has_A_n5",
+        "has_B_n4"
+      ],
+      "w1": [
+        "consecutive_n0_n1",
+        "consecutive_n2_n1",
+        "consecutive_n2_n3",
+        "consecutive_n4_n3",
+        "consecutive_n4_n5",
+        "consecutive_n1_n0",
+        "consecutive_n1_n2",
+        "consecutive_n3_n2",
+        "consecutive_n3_n4",
+        "consecutive_n5_n4",
+        "has_A_n3",
+        "has_B_n4"
+      ],
+      "w2": [
+        "consecutive_n0_n1",
+        "consecutive_n2_n1",
+        "consecutive_n2_n3",
+        "consecutive_n4_n3",
+        "consecutive_n4_n5",
+        "consecutive_n1_n0",
+        "consecutive_n1_n2",
+        "consecutive_n3_n2",
+        "consecutive_n3_n4",
+        "consecutive_n5_n4",
+        "has_A_n3",
+        "has_B_n2"
+      ],
+      "w3": [
+        "consecutive_n0_n1",
+        "consecutive_n2_n1",
+        "consecutive_n2_n3",
+        "consecutive_n4_n3",
+        "consecutive_n4_n5",
+        "consecutive_n1_n0",
+        "consecutive_n1_n2",
+        "consecutive_n3_n2",
+        "consecutive_n3_n4",
+        "consecutive_n5_n4",
+        "has_A_n1",
+        "has_B_n2"
+      ],
+      "w4": [
+        "consecutive_n0_n1",
+        "consecutive_n2_n1",
+        "consecutive_n2_n3",
+        "consecutive_n4_n3",
+        "consecutive_n4_n5",
+        "consecutive_n1_n0",
+        "consecutive_n1_n2",
+        "consecutive_n3_n2",
+        "consecutive_n3_n4",
+        "consecutive_n5_n4",
+        "has_A_n1",
+        "has_B_n0"
+      ]
+    },
+    "designated": [
+      "w1",
+      "w0"
+    ]
+  },
+  "actions": {
+    "ann_A_B": {
+      "action-type": "basic",
+      "events": [
+        "e-ann"
+      ],
+      "relations": {
+        "Fully": {
+          "e-ann": [
+            "e-ann"
+          ]
+        }
+      },
+      "designated": [
+        "e-ann"
+      ],
+      "preconditions": {
+        "e-ann": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "A"
+                  ],
+                  "formula": "has_B_n0"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "A"
+                  ],
+                  "formula": "has_B_n2"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "A"
+                  ],
+                  "formula": "has_B_n4"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "A"
+                  ],
+                  "formula": "has_B_n1"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "A"
+                  ],
+                  "formula": "has_B_n3"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "A"
+                  ],
+                  "formula": "has_B_n5"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "effects": {
+        "e-ann": null
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "ann_B_A": {
+      "action-type": "basic",
+      "events": [
+        "e-ann"
+      ],
+      "relations": {
+        "Fully": {
+          "e-ann": [
+            "e-ann"
+          ]
+        }
+      },
+      "designated": [
+        "e-ann"
+      ],
+      "preconditions": {
+        "e-ann": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "B"
+                  ],
+                  "formula": "has_A_n0"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "B"
+                  ],
+                  "formula": "has_A_n2"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "B"
+                  ],
+                  "formula": "has_A_n4"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "B"
+                  ],
+                  "formula": "has_A_n1"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "B"
+                  ],
+                  "formula": "has_A_n3"
+                }
+              },
+              {
+                "connective": "not",
+                "formula": {
+                  "modality-name": "box",
+                  "modality-index": [
+                    "B"
+                  ],
+                  "formula": "has_A_n5"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "effects": {
+        "e-ann": null
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    }
+  },
+  "goal": {
+    "formula": {
+      "modality-name": "box",
+      "modality-index": [
+        "B"
+      ],
+      "formula": {
+        "modality-name": "box",
+        "modality-index": [
+          "A"
+        ],
+        "formula": "has_B_n4"
+      }
+    }
+  }
+}

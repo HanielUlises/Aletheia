@@ -1,0 +1,41 @@
+{
+  "action": "open_A",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": {
+        "action": "peek_A",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": {
+              "action": "signal_A_B",
+              "branches": [
+                {
+                  "event": 0,
+                  "subtree": {
+                    "action": "signal_A_C",
+                    "branches": [
+                      {
+                        "event": 0,
+                        "subtree": {
+                          "action": "shout-tails_A",
+                          "branches": [
+                            {
+                              "event": 0,
+                              "subtree": null
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

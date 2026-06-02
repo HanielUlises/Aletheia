@@ -1,0 +1,17 @@
+{
+  "action": "ask_c1",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": {
+        "action": "ask_c2",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": null
+          }
+        ]
+      }
+    }
+  ]
+}

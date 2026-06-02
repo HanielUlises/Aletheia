@@ -1,0 +1,239 @@
+# ============================================================
+# Aletheia — IPC 2026 Epistemic Planning Track Submission
+# ============================================================
+
+# ----------------------------
+# Stage 1: Build
+# ----------------------------
+Bootstrap: docker
+From: ubuntu:24.04
+Stage: build
+
+%files
+    . /src
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update -y
+
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        nlohmann-json3-dev \
+        python3 \
+        ca-certificates
+
+    rm -rf /var/lib/apt/lists/*
+
+    cd /src
+
+    rm -rf build
+
+    cmake \
+        -B build \
+        -S . \
+        -DCMAKE_BUILD_TYPE=Release
+
+    cmake --build build -j"$(nproc)"
+
+    strip build/epistemic_planner || true
+
+    install -Dm755 build/epistemic_planner \
+        /opt/aletheia/bin/epistemic_planner
+
+    install -Dm755 aletheia.sh \
+        /opt/aletheia/aletheia.sh
+
+    install -Dm755 serialize.py \
+        /opt/aletheia/serialize.py
+
+
+# ----------------------------
+# Stage 2: Runtime
+# ----------------------------
+Bootstrap: docker
+From: ubuntu:24.04
+Stage: run
+
+%files from build
+    /opt/aletheia /opt/aletheia
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update -y
+
+    apt-get install -y --no-install-recommends \
+        python3 \
+        libstdc++6 \
+        ca-certificates
+
+    rm -rf /var/lib/apt/lists/*
+
+    chmod +x /opt/aletheia/aletheia.sh
+    chmod +x /opt/aletheia/bin/epistemic_planner
+    chmod +x /opt/aletheia/serialize.py
+
+
+%environment
+    export PATH=/opt/aletheia:/opt/aletheia/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+
+# ============================================================
+# IPC ENTRYPOINT
+# ============================================================
+
+%runscript
+    exec /opt/aletheia/aletheia.sh "$@"
+
+
+# ============================================================
+# METADATA
+# ============================================================
+
+%labels
+
+    Name Aletheia
+
+    Description DEL-based epistemic planner for IPC 2026.
+    Supports linear and conditional epistemic planning over
+    S5n and KD45n models using DEL product update,
+    bisimulation contraction, GBFS/EHC search,
+    and iterative-deepening AO*.
+
+    Authors Haniel Ulises Vásquez Morales <hanielulises2003@gmail.com>
+
+    License MIT
+
+    # --------------------------------------------------------
+    # Modal / epistemic capabilities
+    # --------------------------------------------------------
+
+    SupportsCommonKnowledge yes
+    SupportsStaticCommonKnowledge yes
+    SupportsGroupModalities yes
+    SupportsKnowingWhether yes
+
+    SupportsModalGoals yes
+    SupportsModalPreconditions yes
+    SupportsModalObsConditions yes
+    SupportsModalPostconditions yes
+
+    SupportsKD45Frames yes
+    SupportsFinitaryS5Theories yes
+    SupportsGeneralFrames no
+
+    # --------------------------------------------------------
+    # Planning semantics
+    # --------------------------------------------------------
+
+    SupportsConditionalEffects yes
+    SupportsOnticActions yes
+    SupportsPartialObservability yes
+    SupportsMultiPointedModels yes
+
+    # --------------------------------------------------------
+    # Logical connectives
+    # --------------------------------------------------------
+
+    SupportsDisjunctiveGoals yes
+    SupportsDisjunctivePreconditions yes
+    SupportsDisjunctiveObsConditions yes
+    SupportsDisjunctivePostconditions yes
+    SupportsDisjunctiveListFormulas no
+
+    SupportsNegativeGoals yes
+    SupportsNegativePreconditions yes
+    SupportsNegativeObsConditions yes
+    SupportsNegativePostconditions yes
+    SupportsNegativeListFormulas no
+
+    # --------------------------------------------------------
+    # Quantification
+    # --------------------------------------------------------
+
+    # Grounded universal formulas are supported after plank expansion
+    SupportsUniversalGoals yes
+    SupportsUniversalPreconditions yes
+    SupportsUniversalObsConditions yes
+    SupportsUniversalPostconditions yes
+    SupportsUniversalListFormulas no
+
+    SupportsExistentialGoals no
+    SupportsExistentialPreconditions no
+    SupportsExistentialObsConditions no
+    SupportsExistentialPostconditions no
+    SupportsExistentialListFormulas no
+
+    # --------------------------------------------------------
+    # Lists / comprehension
+    # --------------------------------------------------------
+
+    SupportsLists no
+    SupportsListComprehensions no
+
+    # --------------------------------------------------------
+    # Miscellaneous
+    # --------------------------------------------------------
+
+    SupportsFacts yes
+    SupportsEquality yes
+    SupportsTyping yes
+
+    SupportsAgentGroups no
+    SupportsEventsConditions no
+
+
+# ============================================================
+# HELP
+# ============================================================
+
+%help
+
+    Aletheia — DEL-based epistemic planner for IPC 2026.
+
+    Usage:
+
+        planner <task.json> <plan.json>
+
+    or directly:
+
+        aletheia.sh <task.json> <plan.json> [options]
+
+    Options:
+
+        --heuristic ed|ug|wc|ks
+            Heuristic function.
+
+                ed = epistemic distance
+                ug = unsatisfied goals
+                wc = world count
+                ks = knowledge spread
+
+        --timeout N
+            Timeout in seconds.
+
+        --ehc
+            Force Enforced Hill Climbing.
+
+        --gbfs
+            Force Greedy Best-First Search.
+
+        --conditional
+            Force AO* conditional planning.
+
+        --limit N
+            Search node/depth limit.
+
+    Output policy:
+
+        Solved:
+            ["act_1", "act_2", ..., "act_k"]
+
+        Conditional plans:
+            Flattened automatically by serialize.py
+            into IPC-compatible linear action arrays.
+
+        Unsolved:
+            null

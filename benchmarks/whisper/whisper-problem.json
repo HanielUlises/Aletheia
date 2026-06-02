@@ -1,0 +1,185 @@
+{
+  "planning-task-info": {
+    "problem": "whisper-1",
+    "domain": "whisper",
+    "libraries": [
+      "intermediate"
+    ],
+    "requirements": [
+      ":KD45-frames",
+      ":disjunctive-goals",
+      ":disjunctive-list-formulas",
+      ":disjunctive-preconditions",
+      ":equality",
+      ":events-conditions",
+      ":list-comprehensions",
+      ":lists",
+      ":modal-goals",
+      ":multi-pointed-models",
+      ":negative-goals",
+      ":negative-list-formulas",
+      ":negative-preconditions",
+      ":ontic-actions",
+      ":partial-observability"
+    ],
+    "agents-number": 3,
+    "atoms-number": 2,
+    "facts-number": 0,
+    "actions-number": 1,
+    "initial-worlds-number": 2,
+    "goal-modal-depth": 1,
+    "goal-size": 7
+  },
+  "language": {
+    "atoms": [
+      "told-bob",
+      "secret-true"
+    ],
+    "agents": [
+      "alice",
+      "bob",
+      "carol"
+    ]
+  },
+  "facts": [],
+  "initial-state": {
+    "worlds": [
+      "w0",
+      "w1"
+    ],
+    "relations": {
+      "alice": {
+        "w0": [
+          "w0"
+        ],
+        "w1": [
+          "w1"
+        ]
+      },
+      "bob": {
+        "w0": [
+          "w0"
+        ],
+        "w1": [
+          "w1"
+        ]
+      },
+      "carol": {
+        "w0": [
+          "w0",
+          "w1"
+        ],
+        "w1": [
+          "w0",
+          "w1"
+        ]
+      }
+    },
+    "labels": {
+      "w0": [
+        "secret-true"
+      ],
+      "w1": []
+    },
+    "designated": [
+      "w0"
+    ]
+  },
+  "actions": {
+    "alice-whispers_alice": {
+      "action-type": "private-ontic",
+      "events": [
+        "e-whisper",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-whisper": [
+            "e-whisper"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-whisper": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-whisper"
+      ],
+      "preconditions": {
+        "e-whisper": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              "true",
+              {
+                "connective": "not",
+                "formula": "told-bob"
+              }
+            ]
+          }
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-whisper": {
+          "told-bob": {
+            "formula": "true"
+          }
+        },
+        "nil": null
+      },
+      "observability-conditions": {
+        "alice": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "bob": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "carol": {
+          "Oblivious": {
+            "formula": "true"
+          }
+        }
+      }
+    }
+  },
+  "goal": {
+    "formula": {
+      "connective": "and",
+      "formulas": [
+        "told-bob",
+        {
+          "modality-name": "box",
+          "modality-index": [
+            "bob"
+          ],
+          "formula": "secret-true"
+        },
+        {
+          "connective": "not",
+          "formula": {
+            "modality-name": "Kw.box",
+            "modality-index": [
+              "carol"
+            ],
+            "formula": "secret-true"
+          }
+        }
+      ]
+    }
+  }
+}

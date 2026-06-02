@@ -1,0 +1,25 @@
+{
+  "action": "signal_A_B",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": {
+        "action": "open_A",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": {
+              "action": "peek_B",
+              "branches": [
+                {
+                  "event": 0,
+                  "subtree": null
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
