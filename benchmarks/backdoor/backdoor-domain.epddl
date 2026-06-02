@@ -1,0 +1,46 @@
+(define (domain backdoor)
+
+  (:action-type-libraries intermediate)
+
+  (:requirements
+    :KD45-frames
+    :ontic-actions
+    :partial-observability
+    :negative-preconditions
+    :modal-goals
+    :lists
+    :list-comprehensions
+    :equality
+  )
+
+  (:predicates
+    (key-at-back)
+  )
+
+  (:event nil)
+
+  ; Alice moves the key to the back door while Bob is away.
+  ; Bob is oblivious — he retains his false belief that the
+  ; key is still at the front (i.e. not at the back).
+  ; This is a KD45 scenario: Bob's belief is false in the actual world.
+
+  (:event e-hide
+    :parameters (?i - agent)
+    :precondition (and
+      (= ?i alice)
+      (not (key-at-back))
+    )
+    :effects (key-at-back)
+  )
+
+  (:action alice-hides-key
+    :parameters (?i - agent | (= ?i alice))
+    :action-type (private-ontic (e-hide ?i) (nil))
+    :observability-conditions
+      (:and
+        (alice Fully)
+        (default Oblivious)
+      )
+  )
+
+)

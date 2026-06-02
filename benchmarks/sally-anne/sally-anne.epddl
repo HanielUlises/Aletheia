@@ -1,0 +1,55 @@
+(define (domain sally-anne)
+
+  (:action-type-libraries intermediate)
+
+  (:requirements
+    :KD45-frames
+    :ontic-actions
+    :partial-observability
+    :negative-preconditions
+    :modal-goals
+    :lists
+    :list-comprehensions
+    :equality
+  )
+
+  (:predicates
+    (at-basket)
+    (at-box)
+  )
+
+  (:event nil)
+
+  (:event e-move-to-box
+    :parameters (?i - agent)
+    :precondition (at-basket)
+    :effects (at-box)
+  )
+
+  (:event e-clear-basket
+    :parameters (?i - agent)
+    :precondition (at-basket)
+    :effects (not (at-basket))
+  )
+
+  (:action anne-moves-marble-box
+    :parameters (?i - agent | (= ?i anne))
+    :action-type (private-ontic (e-move-to-box ?i) (nil))
+    :observability-conditions
+      (:and
+        (?i Fully)
+        (default Oblivious)
+      )
+  )
+
+  (:action anne-moves-marble-clear
+    :parameters (?i - agent | (= ?i anne))
+    :action-type (private-ontic (e-clear-basket ?i) (nil))
+    :observability-conditions
+      (:and
+        (?i Fully)
+        (default Oblivious)
+      )
+  )
+
+)

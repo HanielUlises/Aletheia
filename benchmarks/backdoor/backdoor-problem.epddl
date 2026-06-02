@@ -1,0 +1,33 @@
+(define (problem backdoor-1)
+
+  (:domain backdoor)
+
+  (:requirements
+    :KD45-frames
+    :modal-goals
+    :negative-preconditions
+  )
+
+  (:agents alice bob)
+
+  (:init
+    (:and
+      ; Actual world: key is at the front (not at back yet)
+      (not (key-at-back))
+
+      ; Common knowledge: key is not at the back
+      ([C. All] (not (key-at-back)))
+    )
+  )
+
+  (:goal
+    (and
+      ; Actual world: key is now at the back
+      (key-at-back)
+
+      ; Bob still believes the key is NOT at the back (false belief — KD45)
+      ([bob] (not (key-at-back)))
+    )
+  )
+
+)

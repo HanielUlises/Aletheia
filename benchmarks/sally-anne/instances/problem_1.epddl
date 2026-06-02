@@ -1,0 +1,33 @@
+(define (problem sally-anne-1)
+
+  (:domain sally-anne)
+
+  (:requirements
+    :KD45-frames
+    :finitary-S5-theories
+    :modal-goals
+    :negative-preconditions
+  )
+
+  (:agents sally anne)
+
+  (:init
+    (:and
+      (at-basket)
+      (not (at-box))
+      ([C. All] (and
+        (or (at-basket) (at-box))
+        (not (and (at-basket) (at-box)))
+      ))
+      ([C. All] (at-basket))
+    )
+  )
+
+  (:goal
+    (and
+      (at-box)
+      ([sally] (at-basket))
+    )
+  )
+
+)

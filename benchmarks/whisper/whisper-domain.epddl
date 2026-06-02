@@ -1,0 +1,42 @@
+(define (domain whisper)
+
+  (:action-type-libraries intermediate)
+
+  (:requirements
+    :KD45-frames
+    :ontic-actions
+    :partial-observability
+    :negative-preconditions
+    :modal-goals
+    :negative-goals
+    :equality
+  )
+
+  (:predicates
+    (secret-true)
+    (told-bob)
+  )
+
+  (:event nil)
+
+  (:event e-whisper
+    :parameters (?i - agent)
+    :precondition (and
+      (= ?i alice)
+      (not (told-bob))
+    )
+    :effects (told-bob)
+  )
+
+  (:action alice-whispers
+    :parameters (?i - agent | (= ?i alice))
+    :action-type (private-ontic (e-whisper ?i) (nil))
+    :observability-conditions
+      (:and
+        (alice Fully)
+        (bob   Fully)
+        (default Oblivious)
+      )
+  )
+
+)

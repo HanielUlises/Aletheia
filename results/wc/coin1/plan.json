@@ -1,0 +1,17 @@
+{
+  "action": "open_A",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": {
+        "action": "peek_A",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": null
+          }
+        ]
+      }
+    }
+  ]
+}

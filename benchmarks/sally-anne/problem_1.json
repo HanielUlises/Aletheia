@@ -1,0 +1,201 @@
+{
+  "planning-task-info": {
+    "problem": "sally-anne-1",
+    "domain": "sally-anne",
+    "libraries": [
+      "intermediate"
+    ],
+    "requirements": [
+      ":KD45-frames",
+      ":common-knowledge",
+      ":disjunctive-list-formulas",
+      ":disjunctive-preconditions",
+      ":equality",
+      ":events-conditions",
+      ":finitary-S5-theories",
+      ":group-modalities",
+      ":knowing-whether",
+      ":list-comprehensions",
+      ":lists",
+      ":modal-goals",
+      ":multi-pointed-models",
+      ":negative-list-formulas",
+      ":negative-preconditions",
+      ":ontic-actions",
+      ":partial-observability",
+      ":static-common-knowledge"
+    ],
+    "agents-number": 2,
+    "atoms-number": 2,
+    "facts-number": 0,
+    "actions-number": 2,
+    "initial-worlds-number": 1,
+    "goal-modal-depth": 1,
+    "goal-size": 4
+  },
+  "language": {
+    "atoms": [
+      "at-box",
+      "at-basket"
+    ],
+    "agents": [
+      "sally",
+      "anne"
+    ]
+  },
+  "facts": [],
+  "initial-state": {
+    "worlds": [
+      "w0"
+    ],
+    "relations": {
+      "sally": {
+        "w0": [
+          "w0"
+        ]
+      },
+      "anne": {
+        "w0": [
+          "w0"
+        ]
+      }
+    },
+    "labels": {
+      "w0": [
+        "at-basket"
+      ]
+    },
+    "designated": [
+      "w0"
+    ]
+  },
+  "actions": {
+    "anne-moves-marble-box_anne": {
+      "action-type": "private-ontic",
+      "events": [
+        "e-move-to-box",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move-to-box": [
+            "e-move-to-box"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-move-to-box": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-move-to-box"
+      ],
+      "preconditions": {
+        "e-move-to-box": {
+          "formula": "at-basket"
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-move-to-box": {
+          "at-box": {
+            "formula": "true"
+          }
+        },
+        "nil": null
+      },
+      "observability-conditions": {
+        "sally": {
+          "Oblivious": {
+            "formula": "true"
+          }
+        },
+        "anne": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "anne-moves-marble-clear_anne": {
+      "action-type": "private-ontic",
+      "events": [
+        "e-clear-basket",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-clear-basket": [
+            "e-clear-basket"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-clear-basket": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-clear-basket"
+      ],
+      "preconditions": {
+        "e-clear-basket": {
+          "formula": "at-basket"
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-clear-basket": {
+          "at-basket": {
+            "formula": "false"
+          }
+        },
+        "nil": null
+      },
+      "observability-conditions": {
+        "sally": {
+          "Oblivious": {
+            "formula": "true"
+          }
+        },
+        "anne": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    }
+  },
+  "goal": {
+    "formula": {
+      "connective": "and",
+      "formulas": [
+        "at-box",
+        {
+          "modality-name": "box",
+          "modality-index": [
+            "sally"
+          ],
+          "formula": "at-basket"
+        }
+      ]
+    }
+  }
+}

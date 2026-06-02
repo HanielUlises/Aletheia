@@ -1,0 +1,35 @@
+(define (problem whisper-1)
+
+  (:domain whisper)
+
+  (:requirements
+    :KD45-frames
+    :multi-pointed-models
+    :modal-goals
+    :negative-goals
+  )
+
+  (:agents alice bob carol)
+
+  (:init
+    :worlds (w0 w1)
+    :relations (
+      alice (:and (w0 w0) (w1 w1))
+      bob   (:and (w0 w0) (w1 w1))
+      carol (:forall (?w ?v - world) (?w ?v))
+    )
+    :labels (
+      w0 (secret-true)
+    )
+    :designated (w0)
+  )
+
+  (:goal
+    (and
+      (told-bob)
+      ([bob] (secret-true))
+      (not ([Kw. carol] (secret-true)))
+    )
+  )
+
+)
