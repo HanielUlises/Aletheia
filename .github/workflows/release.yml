@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake build-essential nlohmann-json3-dev
+
+      - name: Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/epistemic_planner dist/
+          cp aletheia.sh serialize.py dist/
+          tar -czf aletheia-linux-x86_64.tar.gz -C dist .
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: aletheia-linux-x86_64.tar.gz
+          generate_release_notes: true
