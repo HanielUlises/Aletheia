@@ -1,4 +1,5 @@
 #include "product_update.hpp"
+#include "world_cap_policy.hpp"
 #include <algorithm>
 #include <iostream>
 
@@ -45,8 +46,6 @@
 // 32 worlds and |E|=2, so the first step produces 64 raw worlds. A plan of
 // length 8 through a sequence of fully-contracting actions stays well under 64
 // worlds post-contraction; only diverging (non-contracting) paths hit the cap.
-static constexpr size_t WORLD_CAP = 512;
-
 static uint64_t encode_pair(WorldIdx w, EventIdx e) {
     return (static_cast<uint64_t>(w) << 32) | static_cast<uint64_t>(e);
 }
@@ -200,7 +199,7 @@ static bool enforce_seriality(EpistemicState& s,
 // seriality repair compacted the IDs between the two derivations.
 std::optional<ProductUpdateResult>
 product_update_with_map(const EpistemicState& s, const Action& a,
-                        bool enforce_kd45) {
+                        bool enforce_kd45, const WorldCapPolicy& cap) {
     size_t na = s.num_agents;
 
     // Upper-bound check before any allocation. |W| * |E| is the maximum number
@@ -208,10 +207,10 @@ product_update_with_map(const EpistemicState& s, const Action& a,
     // Actual count is ≤ this after precondition filtering, but the check is
     // conservative by design — we want to abort before building the world
     // vector, not after.
-    if (s.worlds.size() * a.events.size() > WORLD_CAP) {
+    if (!cap.allows(s.worlds.size(), a.events.size())) {
         std::cerr << "[product_update] world cap hit ("
                   << s.worlds.size() << " x " << a.events.size()
-                  << " > " << WORLD_CAP << ") — pruning branch\n";
+                  << " > " << cap.cap() << ") — pruning branch\n";
         return std::nullopt;
     }
 
@@ -344,8 +343,8 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
 std::optional<EpistemicState> product_update(const EpistemicState& s,
                                               const Action& a,
-                                              bool enforce_kd45) {
-    auto res = product_update_with_map(s, a, enforce_kd45);
+                                              bool enforce_kd45, const WorldCapPolicy& cap) {
+    auto res = product_update_with_map(s, a, enforce_kd45, cap);
     if (!res) return std::nullopt;
     return std::move(res->state);
 }
@@ -367,8 +366,8 @@ std::optional<EpistemicState> product_update(const EpistemicState& s,
 // making the branch designated sets incoherent with each other (a world id in
 // one branch would refer to a different world in another).
 std::vector<std::pair<EventIdx, EpistemicState>>
-product_update_split(const EpistemicState& s, const Action& a, bool enforce_kd45) {
-    auto maybe_full = product_update_with_map(s, a, enforce_kd45);
+product_update_split(const EpistemicState& s, const Action& a, bool enforce_kd45, const WorldCapPolicy& cap) {
+    auto maybe_full = product_update_with_map(s, a, enforce_kd45, cap);
     if (!maybe_full) return {};
 
     const EpistemicState& full  = maybe_full->state;
