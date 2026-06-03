@@ -80,7 +80,7 @@ std::optional<SearchResult> search(const PlanningTask& task,
         for (auto& action : task.actions) {
             if (!action.applicable(node.state)) continue;
 
-            auto maybe_next = product_update(node.state, action, task.kd45);
+            auto maybe_next = product_update(node.state, action, task.kd45, make_world_cap_policy(task.partial_obs));
             if (!maybe_next) continue;
 
             EpistemicState next = bisim_contract(std::move(*maybe_next));
@@ -165,7 +165,7 @@ rank_actions(const EpistemicState& s,
     std::vector<std::pair<float, const Action*>> ranked;
     for (auto& a : task.actions) {
         if (!a.applicable_weak(s)) continue;
-        auto maybe = product_update(s, a, task.kd45);
+        auto maybe = product_update(s, a, task.kd45, make_world_cap_policy(task.partial_obs));
         if (!maybe) continue;
 
         stats.heuristic_calls++;
@@ -243,7 +243,7 @@ and_or_dfs(const EpistemicState& s,
         // product_update_split reuses the same pair_to_idx produced internally
         // by product_update, so the branch world IDs are consistent with the
         // full update and with each other.
-        auto branches = product_update_split(s, *action, task.kd45);
+        auto branches = product_update_split(s, *action, task.kd45, make_world_cap_policy(task.partial_obs));
         if (branches.empty()) continue;
 
         generated_any = true;
@@ -422,7 +422,7 @@ std::optional<SearchResult> search(const PlanningTask& task,
         for (auto& action : task.actions) {
             if (!action.applicable(cur)) continue;
 
-            auto maybe_next = product_update(cur, action, task.kd45);
+            auto maybe_next = product_update(cur, action, task.kd45, make_world_cap_policy(task.partial_obs));
             if (!maybe_next) continue;
 
             EpistemicState next = bisim_contract(std::move(*maybe_next));
@@ -509,7 +509,7 @@ std::optional<SearchResult> search(const PlanningTask& task,
                 for (auto& action : task.actions) {
                     if (!action.applicable(node.state)) continue;
 
-                    auto maybe_next = product_update(node.state, action, task.kd45);
+                    auto maybe_next = product_update(node.state, action, task.kd45, make_world_cap_policy(task.partial_obs));
                     if (!maybe_next) continue;
 
                     EpistemicState next = bisim_contract(std::move(*maybe_next));
