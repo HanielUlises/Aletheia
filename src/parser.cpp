@@ -493,24 +493,42 @@ PlanningTask load_task(const std::string& json_path) {
 
     // Detect partial observability.
     //
-    // A domain has partial observability iff at least one action assigns
-    // different observability cases to different agents — i.e. some agents
-    // are Fully observable while others are Oblivious or have conditional
-    // cases. We detect this by checking whether any action has obs_cases
-    // entries that differ across agents (non-empty obs_cases for at least
-    // two agents with different case counts, or any agent with >0 cases that
-    // maps an event to a non-identity relation).
+    // A domain has partial observability iff at least one action has agents
+    // with heterogeneous observability — some Fully observable, others
+    // Oblivious or conditional. In the parsed representation this shows up as
+    // obs_cases[ag][0].relation differing between agents: Fully has the
+    // identity relation (e -> {e} for all events), Oblivious maps every event
+    // to {nil} (the single non-designated event), and conditional cases have
+    // world-dependent rows.
     //
-    // The conservative proxy used here: partial_obs = true iff any action
-    // has at least two agents whose obs_cases list sizes differ. This catches
-    // all known partial-obs benchmarks (Gossip, Grapevine, AMC) without
-    // requiring us to inspect the actual event relations.
+    // Comparing obs_cases sizes across agents is insufficient — Gossip assigns
+    // exactly one ObsCase per agent (all have size 1) but with structurally
+    // different relations. We instead compare the actual relation vectors of
+    // the first ObsCase across agents: if any two agents disagree the domain
+    // has partial observability.
     task.partial_obs = false;
     for (auto& act : task.actions) {
-        if (act.obs_cases.empty()) continue;
-        size_t first_size = act.obs_cases[0].size();
-        for (size_t ag = 1; ag < act.obs_cases.size(); ag++) {
-            if (act.obs_cases[ag].size() != first_size) {
+        if (act.obs_cases.size() < 2) continue;
+
+        size_t ref_ag = act.obs_cases.size();
+        for (size_t ag = 0; ag < act.obs_cases.size(); ag++) {
+            if (!act.obs_cases[ag].empty()) { ref_ag = ag; break; }
+        }
+        if (ref_ag == act.obs_cases.size()) continue;
+
+        const auto& ref_rel = act.obs_cases[ref_ag][0].relation;
+        for (size_t ag = ref_ag + 1; ag < act.obs_cases.size(); ag++) {
+            if (act.obs_cases[ag].empty()) continue;
+            const auto& ag_rel = act.obs_cases[ag][0].relation;
+            if (ag_rel.size() != ref_rel.size()) {
+                task.partial_obs = true;
+                break;
+            }
+            bool differs = false;
+            for (size_t ei = 0; ei < ref_rel.size() && !differs; ei++)
+                if (ag_rel[ei] != ref_rel[ei])
+                    differs = true;
+            if (differs) {
                 task.partial_obs = true;
                 break;
             }
