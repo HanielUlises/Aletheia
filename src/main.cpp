@@ -175,10 +175,13 @@ static Strategy select_strategy(const PlanningTask& task) {
         return Strategy::GBFS;
     }
 
-    // Private-announcement domains with partial observability grow linearly
-    // in worlds but have a linear plan structure. GBFS with KnowledgeSpread
-    // works; AO* wastes time building contingent branches that never branch.
-    if (task.partial_obs)
+    // Private-announcement domains with partial observability (S5 frame) grow
+    // linearly in worlds but have a linear plan structure — GBFS with
+    // KnowledgeSpread is the right call. KD45 partial-obs domains (backdoor,
+    // sally-anne, whisper) need AO* because belief repair after the product
+    // update produces non-trivial conditional structure even with a single
+    // designated event; they fall through to the KD45 guard below.
+    if (task.partial_obs && !task.kd45)
         return Strategy::GBFS;
 
     if (task.kd45 && worlds <= 8 && desg <= 4 && depth >= 1)
