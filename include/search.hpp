@@ -57,9 +57,14 @@ namespace gbfs {
 // plan exists within the given limits.
 //
 // max_nodes: expansion limit (0 = unlimited)
+// deadline:  wall-clock deadline; defaults to max (no timeout).
+//            Checked once per node expansion — the search aborts and returns
+//            nullopt if the deadline is exceeded, consistent with aostar::search.
+using Deadline = std::chrono::steady_clock::time_point;
 std::optional<SearchResult> search(const PlanningTask& task,
                                    const Heuristic& h,
-                                   size_t max_nodes = 0);
+                                   size_t max_nodes = 0,
+                                   Deadline deadline = Deadline::max());
 
 } // namespace gbfs
 
