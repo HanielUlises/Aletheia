@@ -50,6 +50,8 @@ struct SearchResult {
     PlannerStats stats;
 };
 
+using Deadline = std::chrono::steady_clock::time_point;
+
 namespace gbfs {
 
 // Greedy Best-First Search.
@@ -60,7 +62,6 @@ namespace gbfs {
 // deadline:  wall-clock deadline; defaults to max (no timeout).
 //            Checked once per node expansion — the search aborts and returns
 //            nullopt if the deadline is exceeded, consistent with aostar::search.
-using Deadline = std::chrono::steady_clock::time_point;
 std::optional<SearchResult> search(const PlanningTask& task,
                                    const Heuristic& h,
                                    size_t max_nodes = 0,
@@ -90,7 +91,6 @@ struct ConditionalSearchResult {
 
 namespace aostar {
 
-using Deadline = std::chrono::steady_clock::time_point;
 
 // Iterative-deepening AND-OR search.
 // Returns a conditional plan tree on success, or nullopt if no plan exists

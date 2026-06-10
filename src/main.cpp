@@ -341,12 +341,11 @@ int main(int argc, char* argv[]) {
                         ? timeout_secs - (size_t)elapsed : 0;
                 }
 
-                auto gbfs_deadline = remaining > 0
+                Deadline gbfs_deadline = remaining > 0
                     ? Clock::now() + std::chrono::seconds(remaining)
-                    : std::chrono::time_point<Clock>::max();
+                    : Deadline::max();
 
-                (void)gbfs_deadline;  // gbfs::search takes node limit, not deadline
-                auto gbfs_result = gbfs::search(task, *h, limit);
+                auto gbfs_result = gbfs::search(task, *h, limit, gbfs_deadline);
                 if (gbfs_result) {
                     write_linear_plan(out, *gbfs_result);
                     std::cerr << "[main] Plan written to " << plan_path << "\n";
