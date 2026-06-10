@@ -116,6 +116,7 @@ namespace ehc {
 
 std::optional<SearchResult> search(const PlanningTask& task,
                                    const Heuristic& h,
-                                   size_t max_nodes = 0);
+                                   size_t max_nodes = 0,
+                                   Deadline deadline = Deadline::max());
 
 } // namespace ehc
