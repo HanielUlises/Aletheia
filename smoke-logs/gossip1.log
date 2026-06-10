@@ -1,5 +1,7 @@
 [parser] Frame: S5 (knowledge)
-[parser] Loaded: 5 atoms, 5 agents, 32 worlds (1 designated), 20 actions.
+[parser] Loaded: 5 atoms, 5 agents, 32 worlds (1 designated), 20 actions  partial_obs=1  goal_kw_only=1
 [main] Heuristic: epistemic-distance
-[main] Strategy: GBFS (auto-selected)
+[main] Strategy: GBFS (auto)
 [main] Mode: GBFS
+[gbfs] Solution found! Length=20  Expanded=20  Generated=210  HeuristicCalls=210  BestH=1  FrontierMax=191
+[main] Plan written to /tmp/aletheia-plan-3liYxs.json
