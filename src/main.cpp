@@ -114,11 +114,24 @@ static int goal_modal_depth(const Formula& f) {
 static std::unique_ptr<Heuristic> select_heuristic(const PlanningTask& task) {
     bool sensing = has_sensing_actions(task);
 
-    if (task.goal_kw_only || task.partial_obs) {
+    // KnowledgeSpread is designed for Kw (knowing-whether) goals: it counts
+    // worlds that still fail to resolve each Kw conjunct, giving a tight
+    // gradient as knowledge propagates across agents. It is the right choice
+    // when the goal is purely Kw-shaped, regardless of observability structure.
+    //
+    // partial_obs alone does NOT imply a Kw goal — coin domains have
+    // partial_obs=true but goals of type [A]p (Belief/box), for which
+    // EpistemicDistance gives a better gradient than KnowledgeSpread.
+    // We therefore require goal_kw_only to be true before selecting ks.
+    if (task.goal_kw_only) {
         std::cerr << "[main] Heuristic: knowledge-spread (auto)\n";
         return std::make_unique<KnowledgeSpreadHeuristic>();
     }
 
+    // Sensing actions and purely epistemic goals (no bare atom conjuncts)
+    // benefit from EpistemicDistance, which gives a real-valued gradient
+    // over the modal structure of the goal. partial_obs domains with
+    // Belief/box goals (coins) also land here.
     if (sensing || !has_atom_conjunct(*task.goal)) {
         std::cerr << "[main] Heuristic: epistemic-distance (auto)\n";
         return std::make_unique<EpistemicDistanceHeuristic>();
