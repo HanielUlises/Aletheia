@@ -4,4 +4,4 @@
 [main] Strategy: GBFS (auto)
 [main] Mode: GBFS
 [gbfs] Solution found! Length=20  Expanded=20  Generated=210  HeuristicCalls=210  BestH=1  FrontierMax=191
-[main] Plan written to /tmp/aletheia-plan-3liYxs.json
+[main] Plan written to /tmp/aletheia-plan-ZZihTt.json
