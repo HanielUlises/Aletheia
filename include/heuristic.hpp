@@ -13,7 +13,7 @@ struct Heuristic {
 // Not/And/Or that bottoms out in atoms without crossing a modal operator.
 // A goal that returns false here is purely epistemic (KD45 belief operators
 // with no bare atom conjunct) and should be routed to AO* + KnowledgeSpread.
-static bool has_atom_conjunct(const Formula& f) {
+[[nodiscard]] inline bool has_atom_conjunct(const Formula& f) {
     switch (f.kind) {
         case FormulaKind::Top:
         case FormulaKind::Bot:

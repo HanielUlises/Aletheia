@@ -311,40 +311,34 @@ PlanningTask load_task(const std::string& json_path) {
 
     {
         WorldIdx idx = 0;
-        for (auto& w : is.at("worlds")) {
-            std::string wname = w.get<std::string>();
-            world_idx[wname] = idx++;
-
-            World world_obj;
-            world_obj.id = world_idx[wname];
-            task.init.worlds.push_back(std::move(world_obj));
-        }
+        for (auto& w : is.at("worlds"))
+            world_idx[w.get<std::string>()] = idx++;
     }
 
-    size_t nw = task.init.worlds.size();
+    size_t nw = world_idx.size();
+
+    // The model is allocated up front as three flat bit arrays; every field
+    // below writes bits into them rather than growing per-world containers.
+    task.init.allocate(static_cast<std::uint32_t>(nw),
+                       static_cast<std::uint32_t>(task.num_atoms()),
+                       static_cast<std::uint32_t>(na));
 
     for (auto& [wname, atoms] : is.at("labels").items()) {
         auto it = world_idx.find(wname);
         if (it == world_idx.end()) continue;
 
-        WorldIdx wi = it->second;
         for (auto& a : atoms) {
-            std::string aname = a.get<std::string>();
-            auto ait = task.atom_index.find(aname);
+            auto ait = task.atom_index.find(a.get<std::string>());
             if (ait != task.atom_index.end())
-                task.init.worlds[wi].atoms.insert(ait->second);
+                task.init.set_atom(it->second, ait->second);
         }
     }
 
     for (auto& d : is.at("designated")) {
-        std::string wname = d.get<std::string>();
-        auto it = world_idx.find(wname);
+        auto it = world_idx.find(d.get<std::string>());
         if (it != world_idx.end())
-            task.init.designated.insert(it->second);
+            task.init.set_designated(it->second);
     }
-
-    task.init.accessibility.resize(na, Relation(nw));
-    task.init.num_agents = na;
 
     for (auto& [agent_name, rows] : is.at("relations").items()) {
         auto ait = task.agent_index.find(agent_name);
@@ -356,13 +350,10 @@ PlanningTask load_task(const std::string& json_path) {
             auto sit = world_idx.find(src_wname);
             if (sit == world_idx.end()) continue;
 
-            WorldIdx src = sit->second;
-
             for (auto& t : targets) {
-                std::string twname = t.get<std::string>();
-                auto tit = world_idx.find(twname);
+                auto tit = world_idx.find(t.get<std::string>());
                 if (tit != world_idx.end())
-                    task.init.accessibility[ag][src].insert(tit->second);
+                    task.init.add_edge(ag, sit->second, tit->second);
             }
         }
     }
@@ -549,8 +540,8 @@ PlanningTask load_task(const std::string& json_path) {
     std::cerr << "[parser] Loaded: "
               << task.num_atoms()   << " atoms, "
               << task.num_agents()  << " agents, "
-              << task.init.worlds.size() << " worlds ("
-              << task.init.designated.size() << " designated), "
+              << task.init.num_worlds << " worlds ("
+              << task.init.num_designated() << " designated), "
               << task.num_actions() << " actions"
               << "  partial_obs=" << task.partial_obs
               << "  goal_kw_only=" << task.goal_kw_only

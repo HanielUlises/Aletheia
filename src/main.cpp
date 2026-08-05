@@ -174,8 +174,8 @@ static std::unique_ptr<Heuristic> select_heuristic(const PlanningTask& task) {
 static Strategy select_strategy(const PlanningTask& task) {
     bool sensing   = has_sensing_actions(task);
     int  depth     = goal_modal_depth(*task.goal);
-    size_t desg    = task.init.designated.size();
-    size_t worlds  = task.init.worlds.size();
+    size_t desg    = task.init.num_designated();
+    size_t worlds  = task.init.num_worlds;
     size_t actions = task.actions.size();
 
     if (sensing) {
