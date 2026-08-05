@@ -1,150 +1,214 @@
 #include "bisimulation.hpp"
+
 #include <algorithm>
-#include <numeric>
-#include <unordered_map>
-#include <functional>
+#include <vector>
 
-// Bisimulation contraction via partition refinement.
+// ─────────────────────────────────────────────────────────────────────────────
+// Contraction = reachability restriction + ordered partition refinement.
 //
-// Two worlds w, v are bisimilar iff:
-//   1. V(w) = V(v)
-//   2. For every agent i and every R_i-successor u of w there exists
-//      an R_i-successor u' of v in the same bisimulation class, and vice-versa.
+// Two worlds w, v of a multi-pointed model are bisimilar when
 //
-// The original implementation used std::map<std::vector<int>, int> to assign
-// class ids inside the refinement loop. On dense models (gossip: 32 worlds,
-// 512 pairs/agent) the ordered-map key comparison is O(na * nw) per lookup,
-// making the whole loop O(nw^2 * na * log nw) per iteration and O(nw^3 * na)
-// total enough to block on states of 256+ worlds before contraction even
-// reduces anything.
+//   (i)   V(w) = V(v),
+//   (ii)  w ∈ W* ⇔ v ∈ W*,
+//   (iii) for every agent i, every R_i-successor of w has a bisimilar
+//         R_i-successor of v, and symmetrically.
 //
-// This version uses an unordered_map keyed on a uint64_t hash of the signature,
-// falling back to a collision bucket for the rare case of hash collision.
-// Refinement cost drops to O(nw * na) per iteration amortised.
+// Condition (ii) is what makes the quotient a *pointed* invariant. Dropping it
+// (as the previous implementation did) still preserves formula truth, because
+// bisimilar worlds satisfy the same formulas — but it lets a designated world
+// merge with a non-designated one, so the quotient no longer determines W*, and
+// the canonical form below would identify states that are genuinely different
+// planning situations. Keeping it costs at most a coarser contraction and buys
+// a sound structural identity.
 //
-// The correctness argument is identical to the original: we start with the
-// atom-valuation partition and repeatedly split classes whose members disagree
-// on the multiset of neighbour-classes for some agent, until stable.
+// ── Why ordered refinement rather than Paige–Tarjan ─────────────────────────
+//
+// Paige–Tarjan refines in O(m log n), asymptotically better than the O(r·(m +
+// n log n)) loop below (r = number of rounds, bounded by n but in practice
+// small). It does not, however, produce a *canonical* numbering of the
+// resulting classes, and the planner needs one: the closed list identifies
+// states by fingerprint, so bisimilar models must serialise identically.
+//
+// This implementation gets canonicity for free from the refinement itself. Each
+// round sorts worlds by a key and assigns class ids in sorted order:
+//
+//   round 0:  key(w) = ( [w ∈ W*], V(w) )
+//   round k:  key(w) = ( class_{k-1}(w), ⟨sorted class_{k-1} of R_i(w)⟩_{i∈Ag} )
+//
+// Round 0's key is a function of the model alone. By induction each later key
+// is too, so the class ids at the fixpoint are determined by the isomorphism
+// class of the model and nothing else. Renumbering worlds by final class id is
+// then a canonical form.
+//
+// The fixpoint test is exact: since the round-k key begins with the round-(k-1)
+// class, sorting is order-preserving on the previous partition, so ids are
+// stable and "no class split" is exactly "assignment unchanged".
+// ─────────────────────────────────────────────────────────────────────────────
 
-static size_t hash_signature(int base_class,
-                              const std::vector<std::vector<int>>& nbr_classes) {
-    size_t h = std::hash<int>{}(base_class);
-    for (auto& vec : nbr_classes) {
-        for (int c : vec)
-            h ^= std::hash<int>{}(c) + 0x9e3779b9u + (h << 6) + (h >> 2);
-        h ^= 0xdeadbeef + (h << 6) + (h >> 2);
+namespace {
+
+// Worlds unreachable from W* cannot affect the truth of any formula evaluated
+// at a designated world, so they are dropped before refinement rather than
+// carried through it. The product update materialises the full W × E cross
+// product, which regularly leaves such worlds behind.
+EpistemicState restrict_to_reachable(const EpistemicState& s) {
+    const std::uint32_t nw = s.num_worlds;
+
+    std::vector<bits::Word> reach(s.rel_words, 0);
+    bits::copy_from(reach, s.designated_bits());
+
+    std::vector<WorldIdx> frontier;
+    frontier.reserve(nw);
+    bits::for_each(s.designated_bits(),
+                   [&](std::uint32_t w) { frontier.push_back(w); });
+
+    while (!frontier.empty()) {
+        const WorldIdx w = frontier.back();
+        frontier.pop_back();
+        for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
+            bits::for_each(s.succ(ag, w), [&](std::uint32_t v) {
+                if (!bits::test(reach, v)) {
+                    bits::set(reach, v);
+                    frontier.push_back(v);
+                }
+            });
+        }
     }
-    return h;
+
+    if (bits::count(reach) == nw) return s;
+
+    std::vector<WorldIdx> remap;
+    return restrict_state(s, reach, remap);
 }
 
+} // namespace
+
 EpistemicState bisim_contract(EpistemicState s) {
-    size_t nw = s.worlds.size();
-    size_t na = s.num_agents;
+    if (s.num_worlds == 0) return s;
 
-    if (nw == 0) return s;
+    EpistemicState m  = restrict_to_reachable(s);
+    const std::uint32_t nw = m.num_worlds;
+    const std::uint32_t na = m.num_agents;
+    if (nw == 0) return m;
 
-    std::vector<int> class_of(nw);
+    std::vector<std::int32_t> class_of(nw, 0);
+    std::vector<std::int32_t> next_class(nw, 0);
 
-    // Initial partition by atom valuation.
+    // Keys are variable-length int32 runs in one flat buffer; `key_at` slices
+    // them. Both buffers are reused across rounds, so refinement performs no
+    // per-world allocation — the previous implementation built a fresh
+    // vector<vector<int>> for every world on every round.
+    std::vector<std::int32_t> key_data;
+    std::vector<std::uint32_t> key_begin(nw + 1, 0);
+    std::vector<WorldIdx>      order(nw);
+    std::vector<std::int32_t>  nbr;
+
+    const auto key_at = [&](WorldIdx w) {
+        return std::span<const std::int32_t>(key_data.data() + key_begin[w],
+                                             key_begin[w + 1] - key_begin[w]);
+    };
+
+    const auto lex_less = [&](WorldIdx a, WorldIdx b) {
+        const auto ka = key_at(a), kb = key_at(b);
+        return std::lexicographical_compare(ka.begin(), ka.end(),
+                                            kb.begin(), kb.end());
+    };
+    const auto lex_equal = [&](WorldIdx a, WorldIdx b) {
+        const auto ka = key_at(a), kb = key_at(b);
+        return ka.size() == kb.size() &&
+               std::equal(ka.begin(), ka.end(), kb.begin());
+    };
+
+    // Sorts `order` by key and writes class ids in that order into next_class.
+    const auto assign_classes = [&]() -> std::int32_t {
+        for (WorldIdx w = 0; w < nw; ++w) order[w] = w;
+        std::sort(order.begin(), order.end(), lex_less);
+
+        std::int32_t id = 0;
+        next_class[order[0]] = 0;
+        for (std::size_t i = 1; i < order.size(); ++i) {
+            if (!lex_equal(order[i - 1], order[i])) ++id;
+            next_class[order[i]] = id;
+        }
+        return id + 1;
+    };
+
+    // ── Round 0: valuation and designation ──────────────────────────────────
     {
-        std::unordered_map<size_t, int> seen;
-
-        for (WorldIdx w = 0; w < nw; w++) {
-            std::vector<AtomIdx> sig(s.worlds[w].atoms.begin(),
-                                     s.worlds[w].atoms.end());
-            std::sort(sig.begin(), sig.end());
-            size_t h = 0;
-            for (AtomIdx a : sig)
-                h ^= std::hash<uint32_t>{}(a) + 0x9e3779b9u + (h << 6) + (h >> 2);
-            auto [it, inserted] = seen.emplace(h, (int)seen.size());
-            // Two worlds with the same hash but different atoms get the same
-            // initial class, refinement will split them.
-            class_of[w] = it->second;
-        }
-    }
-
-    bool changed = true;
-    while (changed) {
-        changed = false;
-
-        // For each world, build a signature:
-        //   (current_class, [sorted_unique_neighbour_classes_for_agent_0], ..., [for_agent_na-1])
-        // and assign a new class id via an unordered_map on the hash.
-        //
-        // Collision handling. signatures with the same hash go into a bucket;
-        // within a bucket we do a full vector comparison to separate true
-        // collisions from hash equality.
-
-        using Sig = std::pair<size_t, std::vector<std::vector<int>>>;
-        std::unordered_map<size_t, std::vector<std::pair<Sig, int>>> buckets;
-        std::vector<int> new_class(nw);
-        int next_id = 0;
-
-        for (WorldIdx w = 0; w < nw; w++) {
-            std::vector<std::vector<int>> nbr(na);
-            for (AgentIdx ag = 0; ag < na; ag++) {
-                for (WorldIdx v : s.accessibility[ag][w])
-                    nbr[ag].push_back(class_of[v]);
-                std::sort(nbr[ag].begin(), nbr[ag].end());
-                nbr[ag].erase(std::unique(nbr[ag].begin(), nbr[ag].end()),
-                               nbr[ag].end());
+        key_data.clear();
+        for (WorldIdx w = 0; w < nw; ++w) {
+            key_begin[w] = static_cast<std::uint32_t>(key_data.size());
+            key_data.push_back(m.is_designated(w) ? 1 : 0);
+            // Valuation words, halved into int32 so the whole key is one type.
+            for (bits::Word word : m.val(w)) {
+                key_data.push_back(static_cast<std::int32_t>(word & 0xFFFFFFFFu));
+                key_data.push_back(static_cast<std::int32_t>(word >> 32));
             }
+        }
+        key_begin[nw] = static_cast<std::uint32_t>(key_data.size());
+        assign_classes();
+        class_of.swap(next_class);
+    }
 
-            size_t h = hash_signature(class_of[w], nbr);
-            Sig sig{h, std::move(nbr)};
+    // ── Rounds 1..: split on neighbour classes ──────────────────────────────
+    std::int32_t num_classes = *std::max_element(class_of.begin(), class_of.end()) + 1;
 
-            auto& bucket = buckets[h];
-            int assigned = -1;
-            for (auto& [existing_sig, id] : bucket) {
-                if (existing_sig.first  == sig.first &&
-                    existing_sig.second == sig.second) {
-                    assigned = id;
-                    break;
-                }
+    for (;;) {
+        key_data.clear();
+        for (WorldIdx w = 0; w < nw; ++w) {
+            key_begin[w] = static_cast<std::uint32_t>(key_data.size());
+            key_data.push_back(class_of[w]);
+
+            for (AgentIdx ag = 0; ag < na; ++ag) {
+                nbr.clear();
+                bits::for_each(m.succ(ag, w),
+                               [&](std::uint32_t v) { nbr.push_back(class_of[v]); });
+                std::sort(nbr.begin(), nbr.end());
+                nbr.erase(std::unique(nbr.begin(), nbr.end()), nbr.end());
+
+                // Length prefix keeps the concatenation unambiguous, so plain
+                // lexicographic comparison of the flat key is exact.
+                key_data.push_back(static_cast<std::int32_t>(nbr.size()));
+                key_data.insert(key_data.end(), nbr.begin(), nbr.end());
             }
-            if (assigned == -1) {
-                assigned = next_id++;
-                bucket.emplace_back(sig, assigned);
-            }
-            new_class[w] = assigned;
         }
+        key_begin[nw] = static_cast<std::uint32_t>(key_data.size());
 
-        if (new_class != class_of) {
-            class_of = new_class;
-            changed  = true;
-        }
+        const std::int32_t count = assign_classes();
+        if (next_class == class_of) break;
+
+        class_of.swap(next_class);
+        num_classes = count;
     }
 
-    int num_classes = *std::max_element(class_of.begin(), class_of.end()) + 1;
-    std::vector<WorldIdx> repr(num_classes, static_cast<WorldIdx>(nw));
-    for (WorldIdx w = 0; w < nw; w++) {
-        int c = class_of[w];
-        if (repr[c] == nw) repr[c] = w;
-    }
+    // ── Quotient ────────────────────────────────────────────────────────────
+    //
+    // Class ids are already canonical, so world c of the result is class c.
+    std::vector<WorldIdx> repr(num_classes, kNoWorld);
+    for (WorldIdx w = 0; w < nw; ++w)
+        if (repr[class_of[w]] == kNoWorld) repr[class_of[w]] = w;
 
-    EpistemicState result;
-    result.num_agents = na;
+    EpistemicState out;
+    out.allocate(static_cast<std::uint32_t>(num_classes), m.num_atoms, na);
 
-    for (int c = 0; c < num_classes; c++) {
-        WorldIdx rw = repr[c];
-        World w;
-        w.id    = static_cast<WorldIdx>(c);
-        w.atoms = s.worlds[rw].atoms;
-        result.worlds.push_back(std::move(w));
-    }
+    for (std::int32_t c = 0; c < num_classes; ++c)
+        bits::copy_from(out.val(static_cast<WorldIdx>(c)), m.val(repr[c]));
 
-    for (WorldIdx w : s.designated)
-        result.designated.insert(static_cast<WorldIdx>(class_of[w]));
-
-    result.accessibility.resize(na, Relation(num_classes));
-    for (AgentIdx ag = 0; ag < na; ag++) {
-        for (int c = 0; c < num_classes; c++) {
-            WorldIdx rw = repr[c];
-            for (WorldIdx v : s.accessibility[ag][rw])
-                result.accessibility[ag][c].insert(
-                    static_cast<WorldIdx>(class_of[v]));
+    for (AgentIdx ag = 0; ag < na; ++ag) {
+        for (std::int32_t c = 0; c < num_classes; ++c) {
+            auto dst = out.succ(ag, static_cast<WorldIdx>(c));
+            bits::for_each(m.succ(ag, repr[c]), [&](std::uint32_t v) {
+                bits::set(dst, static_cast<WorldIdx>(class_of[v]));
+            });
         }
     }
 
-    return result;
+    // Designation is constant within a class by construction (round 0 split on
+    // it), so testing the representative is exact.
+    auto des = out.designated_bits();
+    for (std::int32_t c = 0; c < num_classes; ++c)
+        if (m.is_designated(repr[c])) bits::set(des, static_cast<WorldIdx>(c));
+
+    out.invalidate();
+    return out;
 }
