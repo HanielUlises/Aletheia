@@ -14,7 +14,6 @@
 #include <unordered_set>
 #include <vector>
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Search
 //
 // Three changes are shared by every algorithm here.
@@ -35,7 +34,6 @@
 // bisimilarity — the old hash was sensitive to world numbering, so states that
 // were the same epistemic situation under a different labelling hashed
 // differently and were re-expanded.
-// ─────────────────────────────────────────────────────────────────────────────
 
 namespace {
 
@@ -57,7 +55,6 @@ std::vector<std::string> reconstruct(const NodeArena& nodes, std::uint32_t leaf,
 
 } // namespace
 
-// ═════════════════════════════════════════════════════════════════════════════
 namespace gbfs {
 
 namespace {
@@ -214,7 +211,6 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
 
 } // namespace gbfs
 
-// ═════════════════════════════════════════════════════════════════════════════
 namespace aostar {
 
 namespace {
@@ -254,6 +250,12 @@ struct DfsResult {
     bool tainted{false};
 };
 
+// A refuted state, and whether that refutation was forced by the depth bound.
+struct Refuted {
+    std::uint32_t depth{0};       // greatest depth at which failure was proven
+    bool          truncated{false};
+};
+
 struct Context {
     const PlanningTask& task;
     const Heuristic&    h;
@@ -261,11 +263,24 @@ struct Context {
     PlannerStats&       stats;
     Deadline            deadline;
 
+    // Set whenever a branch was abandoned because the depth budget ran out.
+    // If a whole iteration completes without this being set, the depth bound
+    // never bound anything: the search visited the entire reachable AND-OR
+    // space and a larger budget cannot reach further. That is a proof of
+    // unsolvability, not a reason to try depth+1.
+    //
+    // Without it the planner spins forever on unsolvable tasks — cn-2 under a
+    // sensing encoding has two worlds and reaches depth 1.5 million. The
+    // previous test compared expansion counts between iterations, which the
+    // persistent memo defeats: memo hits keep each iteration cheap but still
+    // expand more than the root.
+    bool truncated{false};
+
     // Both memos persist across the iterative-deepening iterations. The previous
     // implementation rebuilt its memo table at every depth, so each iteration
     // re-expanded from scratch everything the last one had already refuted.
-    std::unordered_map<Fingerprint, Solved, FingerprintHash>        solved;
-    std::unordered_map<Fingerprint, std::uint32_t, FingerprintHash> failed_upto;
+    std::unordered_map<Fingerprint, Solved, FingerprintHash>   solved;
+    std::unordered_map<Fingerprint, Refuted, FingerprintHash>  failed_upto;
 
     FingerprintSet ancestors;
 };
@@ -309,8 +324,12 @@ std::vector<Expansion> expand(const EpistemicState& s, Context& ctx) {
 DfsResult dfs(const EpistemicState& s, std::size_t depth, Context& ctx) {
     ctx.stats.nodes_expanded++;
 
-    if (std::chrono::steady_clock::now() >= ctx.deadline)
+    if (std::chrono::steady_clock::now() >= ctx.deadline) {
+        // Also counts as truncation: the iteration did not finish, so its
+        // failure is no evidence that the space was searched.
+        ctx.truncated = true;
         return DfsResult{false, nullptr, 0, true};
+    }
 
     const Fingerprint fp = s.fingerprint();
 
@@ -326,17 +345,27 @@ DfsResult dfs(const EpistemicState& s, std::size_t depth, Context& ctx) {
                                        it->second.height <= depth)
         return DfsResult{true, it->second.tree, it->second.height, false};
 
-    if (depth == 0) return DfsResult{false, nullptr, 0, false};
-
-    // Failure at depth d implies failure at every d' ≤ d.
-    if (auto it = ctx.failed_upto.find(fp); it != ctx.failed_upto.end() &&
-                                            depth <= it->second)
+    if (depth == 0) {
+        ctx.truncated = true;               // the bound, not the domain, stopped us
         return DfsResult{false, nullptr, 0, false};
+    }
+
+    // Failure at depth d implies failure at every d' ≤ d. If that failure was
+    // itself forced by the bound, replaying it must re-raise the flag —
+    // conservatively, since a truncated failure at depth d is also truncated at
+    // any smaller depth. Erring this way can only delay the exhaustion proof,
+    // never fabricate one.
+    if (auto it = ctx.failed_upto.find(fp); it != ctx.failed_upto.end() &&
+                                            depth <= it->second.depth) {
+        if (it->second.truncated) ctx.truncated = true;
+        return DfsResult{false, nullptr, 0, false};
+    }
 
     std::vector<Expansion> candidates = expand(s, ctx);
     if (candidates.empty()) ctx.stats.dead_ends++;
 
     ctx.ancestors.insert(fp);
+    const bool truncated_before = ctx.truncated;
     bool tainted = false;
 
     for (const Expansion& e : candidates) {
@@ -366,8 +395,12 @@ DfsResult dfs(const EpistemicState& s, std::size_t depth, Context& ctx) {
     ctx.ancestors.erase(fp);
 
     if (!tainted) {
-        std::uint32_t& rec = ctx.failed_upto[fp];
-        rec = std::max<std::uint32_t>(rec, static_cast<std::uint32_t>(depth));
+        Refuted& rec = ctx.failed_upto[fp];
+        const auto d = static_cast<std::uint32_t>(depth);
+        if (d >= rec.depth) {
+            rec.depth     = d;
+            rec.truncated = ctx.truncated && !truncated_before;
+        }
     }
     return DfsResult{false, nullptr, 0, tainted};
 }
@@ -395,10 +428,9 @@ search(const PlanningTask& task, const Heuristic& h,
     out.stats.final_h   = init_h;
 
     Context ctx{task, h, make_world_cap_policy(task.partial_obs), out.stats, deadline,
-                {}, {}, {}};
+                false, {}, {}, {}};
 
     const std::size_t depth_limit = (max_depth == 0) ? SIZE_MAX : max_depth;
-    std::size_t last_expanded = 0;
 
     for (std::size_t depth = 0; depth <= depth_limit; ++depth) {
         if (std::chrono::steady_clock::now() >= deadline) {
@@ -409,6 +441,7 @@ search(const PlanningTask& task, const Heuristic& h,
 
         std::cerr << "[aostar] Trying depth " << depth << "\n";
         ctx.ancestors.clear();
+        ctx.truncated = false;
 
         const DfsResult r = dfs(init, depth, ctx);
 
@@ -423,14 +456,14 @@ search(const PlanningTask& task, const Heuristic& h,
             return out;
         }
 
-        // With the memo persisting, an iteration that expands only the root has
-        // nothing new to say and deeper iterations cannot either.
-        if (depth > 0 && out.stats.nodes_expanded == last_expanded + 1) {
-            std::cerr << "[aostar] Search space exhausted at depth " << depth << ".\n";
+        // Nothing was cut off by the budget, so the whole reachable AND-OR
+        // space was searched and refuted. No deeper iteration can differ.
+        if (!ctx.truncated) {
+            std::cerr << "[aostar] Search space exhausted at depth " << depth
+                      << " — no solution exists.\n";
             out.stats.stop_timer();
             return std::nullopt;
         }
-        last_expanded = out.stats.nodes_expanded;
     }
 
     std::cerr << "[aostar] No solution within depth " << depth_limit << ".\n";
@@ -440,7 +473,6 @@ search(const PlanningTask& task, const Heuristic& h,
 
 } // namespace aostar
 
-// ═════════════════════════════════════════════════════════════════════════════
 namespace ehc {
 
 namespace {

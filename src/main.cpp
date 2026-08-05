@@ -229,7 +229,7 @@ static void usage(const char* prog) {
         << "Options:\n"
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
-        << "  --heuristic    ug | ed | ks | wc  (default: auto)\n"
+        << "  --heuristic    ug | ed | ks | wc | rpg | radd  (default: auto)\n"
         << "  --limit        Max nodes / max depth (0 = unlimited)\n"
         << "  --timeout      Timeout in seconds (AO* only)\n"
         << "  --ehc          Force EHC\n"
@@ -287,10 +287,12 @@ int main(int argc, char* argv[]) {
     // Heuristic selection: explicit flag overrides auto-select.
     std::unique_ptr<Heuristic> h;
     if (!heuristic_name.empty()) {
-        if      (heuristic_name == "ug") { h = std::make_unique<UnsatisfiedGoalHeuristic>();   std::cerr << "[main] Heuristic: unsatisfied-goal\n"; }
-        else if (heuristic_name == "ed") { h = std::make_unique<EpistemicDistanceHeuristic>(); std::cerr << "[main] Heuristic: epistemic-distance\n"; }
-        else if (heuristic_name == "ks") { h = std::make_unique<KnowledgeSpreadHeuristic>();   std::cerr << "[main] Heuristic: knowledge-spread\n"; }
-        else                             { h = std::make_unique<WorldCountHeuristic>();         std::cerr << "[main] Heuristic: world-count\n"; }
+        if      (heuristic_name == "ug")   { h = std::make_unique<UnsatisfiedGoalHeuristic>();   std::cerr << "[main] Heuristic: unsatisfied-goal\n"; }
+        else if (heuristic_name == "ed")   { h = std::make_unique<EpistemicDistanceHeuristic>(); std::cerr << "[main] Heuristic: epistemic-distance\n"; }
+        else if (heuristic_name == "ks")   { h = std::make_unique<KnowledgeSpreadHeuristic>();   std::cerr << "[main] Heuristic: knowledge-spread\n"; }
+        else if (heuristic_name == "rpg")  { h = std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Max); std::cerr << "[main] Heuristic: relaxed-closure (max)\n"; }
+        else if (heuristic_name == "radd") { h = std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Add); std::cerr << "[main] Heuristic: relaxed-closure (add)\n"; }
+        else                               { h = std::make_unique<WorldCountHeuristic>();        std::cerr << "[main] Heuristic: world-count\n"; }
     } else {
         h = select_heuristic(task);
     }
@@ -358,9 +360,19 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        write_plan_tree(out, result->plan_tree);
-        out << "\n";
-        std::cerr << "[main] Conditional plan written to " << plan_path << "\n";
+        // An empty conditional plan means the goal already holds. Writing it as
+        // "null" would make it indistinguishable from "no plan exists", which is
+        // what the failure path emits; the empty array matches the convention
+        // linear plans already use.
+        if (!result->plan_tree) {
+            out << "[]\n";
+            std::cerr << "[main] Goal already satisfied — empty plan written to "
+                      << plan_path << "\n";
+        } else {
+            write_plan_tree(out, result->plan_tree);
+            out << "\n";
+            std::cerr << "[main] Conditional plan written to " << plan_path << "\n";
+        }
 
         auto vr = validate(task, result->plan_tree);
         if (vr.valid)

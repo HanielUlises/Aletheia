@@ -244,3 +244,196 @@ float KnowledgeSpreadHeuristic::operator()(const EpistemicState& s,
     }
     return knowledge_spread(s, goal);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// h5 / h6 — relaxed announcement closure
+//
+// See heuristic.hpp for the relaxation. The loop below is a fixpoint over a
+// shrinking world set: at each layer every designated event of every action
+// contributes its precondition extension as a pruning constraint, all of them
+// are applied at once, and the layer at which each goal conjunct first becomes
+// true is recorded.
+//
+// Cost is bounded by the fact that the world set strictly shrinks whenever a
+// layer makes progress, so there are at most |W| layers; kMaxLayers caps it
+// further for the pathological case.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+constexpr std::size_t kMaxLayers = 32;
+
+// Top-level conjuncts of the goal, which is how every heuristic here decomposes
+// it. A non-conjunctive goal is treated as a single conjunct.
+std::vector<const Formula*> goal_conjuncts(const Formula& goal) {
+    std::vector<const Formula*> out;
+    if (goal.kind == FormulaKind::And) {
+        out.reserve(goal.children.size());
+        for (const auto& c : goal.children) out.push_back(c.get());
+    } else {
+        out.push_back(&goal);
+    }
+    return out;
+}
+
+// Does agent `ag` tell events e and f apart under action `a`?
+//
+// Optimistically: true if *any* observability case distinguishes them. The real
+// update picks the first case whose guard holds at the source world, which is
+// world-dependent; taking the union over cases can only make knowledge easier
+// to acquire, which is the direction a relaxation must err in.
+//
+// An agent with no observability cases falls back, in the real update, to full
+// uncertainty (R^E_i(e) = E), and so distinguishes nothing.
+bool distinguishes(const Action& a, AgentIdx ag, EventIdx e, EventIdx f) {
+    if (ag >= a.obs_cases.size()) return false;
+    for (const ObsCase& c : a.obs_cases[ag]) {
+        if (e >= c.relation.size()) continue;
+        if (!c.relation[e].count(f)) return true;
+    }
+    return false;
+}
+
+// One relaxed step, applied in place. Returns true if anything changed.
+//
+// Two monotone effects are modelled, both of which only ever remove structure:
+//
+//   Worlds. Each designated event contributes its precondition extension as a
+//   pruning constraint — the worlds an announcement of that event eliminates.
+//   The event is skipped when it is inconsistent with W* (it could not have
+//   fired), when it prunes nothing, or when applying it would empty W*: the
+//   relaxation may discard possible worlds freely, but a model with no actual
+//   world represents no situation at all.
+//
+//   Edges. This is what the world-elimination-only version missed, and why it
+//   was flat on private announcements. When agent i can tell event e from event
+//   f, the product update leaves no R_i edge from a world where pre(e) held to
+//   one where pre(f) held: i has observed which of the two occurred, so those
+//   worlds are no longer mutually accessible for i. Relaxed, that is
+//
+//       R_i ← R_i \ ( sat(pre(e)) × sat(pre(f)) )
+//
+//   applied for every distinguishing agent and every ordered pair of designated
+//   events. Gossip and Grapevine make progress entirely through this term —
+//   their announcements have trivial preconditions and eliminate no worlds at
+//   all, so a relaxation that only prunes worlds reaches its fixpoint at layer
+//   zero and reports nothing.
+bool relaxed_step(EpistemicState& m, const PlanningTask& task) {
+    const std::uint32_t nw = m.num_worlds;
+
+    std::vector<bits::Word> keep(m.rel_words, 0);
+    bits::fill_all(keep, nw);
+
+    bool progress = false;
+
+    // Extensions are copied out because several are held live at once and the
+    // model is mutated below, which invalidates the state's satisfaction cache.
+    std::vector<bits::Word> ext_e, ext_f;
+
+    for (const Action& a : task.actions) {
+        std::vector<EventIdx> events(a.designated_events.begin(),
+                                     a.designated_events.end());
+        std::sort(events.begin(), events.end());
+
+        // ── Edge cuts ───────────────────────────────────────────────────────
+        for (EventIdx e : events) {
+            if (e >= a.events.size()) continue;
+            m.sat_copy(*a.events[e].precondition, ext_e);
+            if (bits::empty(ext_e)) continue;
+
+            for (EventIdx f : events) {
+                if (f == e || f >= a.events.size()) continue;
+                m.sat_copy(*a.events[f].precondition, ext_f);
+                if (bits::empty(ext_f)) continue;
+
+                for (AgentIdx ag = 0; ag < m.num_agents; ++ag) {
+                    if (!distinguishes(a, ag, e, f)) continue;
+
+                    bits::for_each(ext_e, [&](std::uint32_t w) {
+                        auto row = m.succ(ag, w);
+                        if (!bits::intersects(row, ext_f)) return;
+                        bits::andnot_into(row, ext_f);
+                        progress = true;
+                    });
+                }
+            }
+        }
+    }
+
+    if (progress) m.invalidate();
+
+    // ── World prunes ────────────────────────────────────────────────────────
+    const auto designated = m.designated_bits();
+    for (const Action& a : task.actions) {
+        for (EventIdx e : a.designated_events) {
+            if (e >= a.events.size()) continue;
+
+            m.sat_copy(*a.events[e].precondition, ext_e);
+
+            if (!bits::intersects(ext_e, designated)) continue;
+            if (bits::subset_of(keep, ext_e))          continue;
+
+            std::vector<bits::Word> cand = keep;
+            bits::and_into(cand, ext_e);
+            if (!bits::intersects(cand, designated)) continue;
+
+            keep     = std::move(cand);
+            progress = true;
+        }
+    }
+
+    if (bits::count(keep) != nw) {
+        std::vector<WorldIdx> remap;
+        m = restrict_state(m, keep, remap);
+    }
+
+    return progress;
+}
+
+} // namespace
+
+float RelaxedClosureHeuristic::operator()(const EpistemicState& s,
+                                          const PlanningTask& task) const {
+    const std::vector<const Formula*> conjuncts = goal_conjuncts(*task.goal);
+
+    // level[i] = layer at which conjunct i first held, or npos if never.
+    constexpr std::size_t npos = static_cast<std::size_t>(-1);
+    std::vector<std::size_t> level(conjuncts.size(), npos);
+    std::size_t remaining = conjuncts.size();
+
+    EpistemicState model = s;
+    std::size_t    layer = 0;
+
+    for (;;) {
+        for (std::size_t i = 0; i < conjuncts.size(); ++i) {
+            if (level[i] != npos) continue;
+            if (model.satisfies(*conjuncts[i])) { level[i] = layer; --remaining; }
+        }
+        if (remaining == 0) break;
+        if (layer >= kMaxLayers) break;
+
+        if (!relaxed_step(model, task)) break;   // fixpoint: nothing more to remove
+        ++layer;
+    }
+
+    // Conjuncts the closure never resolved sit one layer past the horizon, with
+    // a residual in [0,1) from the current state so the estimate still has a
+    // gradient rather than collapsing to a constant.
+    const auto score = [&](std::size_t i) -> float {
+        if (level[i] != npos) return static_cast<float>(level[i]);
+        const float residual =
+            std::min(1.0f, epistemic_distance(s, s.designated_bits(), *conjuncts[i], 0));
+        return static_cast<float>(layer + 1) + residual;
+    };
+
+    if (agg_ == RelaxedAggregation::Max) {
+        float worst = 0.0f;
+        for (std::size_t i = 0; i < conjuncts.size(); ++i)
+            worst = std::max(worst, score(i));
+        return worst;
+    }
+
+    float total = 0.0f;
+    for (std::size_t i = 0; i < conjuncts.size(); ++i) total += score(i);
+    return total;
+}

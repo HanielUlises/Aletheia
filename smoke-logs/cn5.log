@@ -3,8 +3,8 @@
 [main] Heuristic: epistemic-distance
 [main] Strategy: EHC (auto)
 [main] Mode: EHC
-[ehc] Plateau at h=0.333333  BFS escape...
-[ehc] BFS escape exhausted  no solution.
+[ehc] Plateau at h=0.333333 — BFS escape...
+[ehc] BFS escape exhausted — no solution.
 [main] EHC failed — falling back to GBFS
-[gbfs] Search exhausted  no solution.
+[gbfs] Search exhausted — no solution.
 [main] No solution found.

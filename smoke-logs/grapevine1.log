@@ -3,5 +3,5 @@
 [main] Heuristic: epistemic-distance
 [main] Strategy: GBFS (auto)
 [main] Mode: GBFS
-[gbfs] Solution found! Length=5  Expanded=5  Generated=146  HeuristicCalls=146  BestH=4  FrontierMax=91
-[main] Plan written to /tmp/aletheia-plan-A25GwB.json
+[gbfs] Solution found. Length=5  Expanded=5  Generated=146  Closed=40  PeakStateBytes=22880
+[main] Plan written to /tmp/aletheia-plan-RllzfM.json
