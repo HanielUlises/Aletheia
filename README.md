@@ -1,7 +1,7 @@
 # Aletheia
 
 Epistemic planner for the International Epistemic Planning Competition (IεPC 2026), Tracks Basic and Intermediate.
-Built at IPN–ESCOM / UNAM–FFyL.
+Built at UNAM–FI (Artificial Intelligence Microsoft Lab) / IPN–ESCOM.
 
 [![Release](https://github.com/HanielUlises/Aletheia/actions/workflows/release.yml/badge.svg)](https://github.com/HanielUlises/Aletheia/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
