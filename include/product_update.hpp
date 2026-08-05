@@ -1,39 +1,48 @@
 #pragma once
-#include "state.hpp"
 #include "action.hpp"
-#include <vector>
-#include <unordered_map>
-
-// Internal result of a DEL product update, the updated state together with
-// the (world,event)->new_world_id mapping that was used to build it.
-//
-
-struct ProductUpdateResult {
-    EpistemicState state;
-    // Maps encode_pair(original_world_id, event_id) -> new world id in state.
-    // After KD45 seriality repair the new world ids are compacted so that
-    // worlds[i].id == i always holds; the map already reflects the compacted ids.
-    std::unordered_map<uint64_t, WorldIdx> pair_to_idx;
-};
-
-// Compute s ⊗ a  (DEL product update).
-//
-// Returns the updated epistemic state, or std::nullopt if the action
-// is not applicable (no designated event's precondition holds in any
-// designated world).
+#include "outcome.hpp"
+#include "state.hpp"
 #include "world_cap_policy.hpp"
 
-std::optional<EpistemicState> product_update(const EpistemicState& s,
-                                              const Action& a,
-                                              bool enforce_kd45 = false,
-                                              const WorldCapPolicy& cap = make_world_cap_policy(false));
+#include <vector>
 
-std::optional<ProductUpdateResult>
+// Result of a DEL product update: the updated state together with the dense
+// (world, event) → new-world table used to build it.
+//
+// The table was previously an unordered_map keyed on a packed uint64. It is
+// probed in the innermost loop of the relation construction — once per
+// (agent, source world, source event, successor world, successor event) — so a
+// hash lookup there dominated the update. The product index space is dense and
+// small (|W| · |E|), so a flat vector with a sentinel is both smaller and O(1)
+// with no hashing.
+//
+// After KD45 seriality repair the surviving worlds are compacted so that world
+// ids are again 0..|W'|-1; the table is patched in place, and entries whose
+// world did not survive are reset to kNoWorld.
+struct ProductUpdateResult {
+    EpistemicState        state;
+    std::vector<WorldIdx> pair_to_idx;    // size |W| · num_events
+    std::uint32_t         num_events{0};
+
+    [[nodiscard]] WorldIdx at(WorldIdx w, EventIdx e) const noexcept {
+        return pair_to_idx[std::size_t(w) * num_events + e];
+    }
+};
+
+// Compute s ⊗ a (DEL product update).
+[[nodiscard]] Outcome<ProductUpdateResult>
 product_update_with_map(const EpistemicState& s, const Action& a,
                         bool enforce_kd45 = false,
                         const WorldCapPolicy& cap = make_world_cap_policy(false));
 
-std::vector<std::pair<EventIdx, EpistemicState>>
+[[nodiscard]] Outcome<EpistemicState>
+product_update(const EpistemicState& s, const Action& a,
+               bool enforce_kd45 = false,
+               const WorldCapPolicy& cap = make_world_cap_policy(false));
+
+// Sensing update: one state per designated event, all sharing the same product
+// model and differing only in which worlds are designated.
+[[nodiscard]] std::vector<std::pair<EventIdx, EpistemicState>>
 product_update_split(const EpistemicState& s, const Action& a,
                      bool enforce_kd45 = false,
                      const WorldCapPolicy& cap = make_world_cap_policy(false));
