@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <vector>
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Heuristics over satisfaction sets.
 //
 // Every heuristic here is a goal-decomposition estimate: it measures how far
@@ -23,7 +22,6 @@
 // across conjuncts through the state's satisfaction cache. The old code called
 // s.satisfies() per conjunct, each a fresh recursive descent, on top of a
 // separate per-heuristic (formula, world) memo that could not outlive one call.
-// ─────────────────────────────────────────────────────────────────────────────
 
 namespace {
 
@@ -245,7 +243,6 @@ float KnowledgeSpreadHeuristic::operator()(const EpistemicState& s,
     return knowledge_spread(s, goal);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 // h5 / h6 — relaxed announcement closure
 //
 // See heuristic.hpp for the relaxation. The loop below is a fixpoint over a
@@ -257,7 +254,6 @@ float KnowledgeSpreadHeuristic::operator()(const EpistemicState& s,
 // Cost is bounded by the fact that the world set strictly shrinks whenever a
 // layer makes progress, so there are at most |W| layers; kMaxLayers caps it
 // further for the pathological case.
-// ─────────────────────────────────────────────────────────────────────────────
 
 namespace {
 
@@ -335,7 +331,7 @@ bool relaxed_step(EpistemicState& m, const PlanningTask& task) {
                                      a.designated_events.end());
         std::sort(events.begin(), events.end());
 
-        // ── Edge cuts ───────────────────────────────────────────────────────
+        //  Edge cuts 
         for (EventIdx e : events) {
             if (e >= a.events.size()) continue;
             m.sat_copy(*a.events[e].precondition, ext_e);
@@ -362,7 +358,7 @@ bool relaxed_step(EpistemicState& m, const PlanningTask& task) {
 
     if (progress) m.invalidate();
 
-    // ── World prunes ────────────────────────────────────────────────────────
+    //  World prunes ─
     const auto designated = m.designated_bits();
     for (const Action& a : task.actions) {
         for (EventIdx e : a.designated_events) {
