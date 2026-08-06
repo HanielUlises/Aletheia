@@ -88,6 +88,12 @@ std::size_t formula_universe_size() noexcept {
     return registry().by_id.size();
 }
 
+void formula_registry_reset() noexcept {
+    Registry& r = registry();
+    r.table.clear();
+    r.by_id.clear();
+}
+
 FormulaPtr Formula::make_top()  { return intern(FormulaKind::Top, 0, 0, {}, {}); }
 FormulaPtr Formula::make_bot()  { return intern(FormulaKind::Bot, 0, 0, {}, {}); }
 
