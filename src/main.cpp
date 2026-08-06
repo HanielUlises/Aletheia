@@ -2,6 +2,7 @@
 #include "validator.hpp"
 #include "search.hpp"
 #include "heuristic.hpp"
+#include "selection_policy.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <chrono>
 #include <algorithm>
+#include <optional>
 
 static void write_plan_tree(std::ostream& out,
                             const std::shared_ptr<PlanNode>& node,
@@ -65,151 +67,33 @@ static bool has_sensing_actions(const PlanningTask& task) {
     return false;
 }
 
-static int goal_modal_depth(const Formula& f) {
-    switch (f.kind) {
-        case FormulaKind::Belief:
-        case FormulaKind::Common:
-        case FormulaKind::Kw:
-            return 1 + goal_modal_depth(*f.children[0]);
-        case FormulaKind::And:
-        case FormulaKind::Or: {
-            int d = 0;
-            for (auto& c : f.children)
-                d = std::max(d, goal_modal_depth(*c));
-            return d;
-        }
-        default:
-            return 0;
-    }
+static std::unique_ptr<Heuristic> make_heuristic(const std::string& label) {
+    if (label == "ug")   return std::make_unique<UnsatisfiedGoalHeuristic>();
+    if (label == "ed")   return std::make_unique<EpistemicDistanceHeuristic>();
+    if (label == "ks")   return std::make_unique<KnowledgeSpreadHeuristic>();
+    if (label == "wc")   return std::make_unique<WorldCountHeuristic>();
+    if (label == "rpg")  return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Max);
+    if (label == "radd") return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Add);
+    return nullptr;
 }
 
-// select_heuristic — choose the best heuristic given task structure.
-//
-// The selection is based on three orthogonal task properties:
-//
-//   goal_kw_only:   every top-level goal conjunct is a Kw (knowing-whether)
-//                   formula. KnowledgeSpreadHeuristic is purpose-built for
-//                   this: it counts how many accessible worlds still fail to
-//                   resolve each Kw conjunct, giving a tight gradient as
-//                   knowledge propagates. EpistemicDistance wastes work here
-//                   because it projects through Belief operators that the
-//                   parser expands Kw into, double-counting uncertainty.
-//
-//   partial_obs:    some agents are Oblivious or have conditional observability.
-//                   These domains rely on agents inferring what others know
-//                   (or don't know) from the observability structure, not from
-//                   direct belief propagation. KnowledgeSpread captures this
-//                   better than EpistemicDistance because it measures the
-//                   spread of knowing-whether across the agent graph, which is
-//                   exactly what partial-obs actions manipulate.
-//
-//   sensing:        actions with |E_d| > 1. EpistemicDistance is good here
-//                   because it gives a real-valued gradient toward resolving
-//                   the branching uncertainty in the goal. UnsatisfiedGoal is
-//                   too coarse (0/1 per conjunct) for sensing domains.
-//
-//   fallback:       UnsatisfiedGoal for purely ontic / shallow tasks where
-//                   the goal has atom conjuncts — EpistemicDistance adds
-//                   overhead without gradient benefit.
-static std::unique_ptr<Heuristic> select_heuristic(const PlanningTask& task) {
-    bool sensing = has_sensing_actions(task);
-
-    // KnowledgeSpread is designed for Kw (knowing-whether) goals: it counts
-    // worlds that still fail to resolve each Kw conjunct, giving a tight
-    // gradient as knowledge propagates across agents. It is the right choice
-    // when the goal is purely Kw-shaped, regardless of observability structure.
-    //
-    // partial_obs alone does NOT imply a Kw goal — coin domains have
-    // partial_obs=true but goals of type [A]p (Belief/box), for which
-    // EpistemicDistance gives a better gradient than KnowledgeSpread.
-    // We therefore require goal_kw_only to be true before selecting ks.
-    if (task.goal_kw_only) {
-        std::cerr << "[main] Heuristic: knowledge-spread (auto)\n";
-        return std::make_unique<KnowledgeSpreadHeuristic>();
-    }
-
-    // Sensing actions and purely epistemic goals (no bare atom conjuncts)
-    // benefit from EpistemicDistance, which gives a real-valued gradient
-    // over the modal structure of the goal. partial_obs domains with
-    // Belief/box goals (coins) also land here.
-    if (sensing || !has_atom_conjunct(*task.goal)) {
-        std::cerr << "[main] Heuristic: epistemic-distance (auto)\n";
-        return std::make_unique<EpistemicDistanceHeuristic>();
-    }
-
-    std::cerr << "[main] Heuristic: unsatisfied-goal (auto)\n";
-    return std::make_unique<UnsatisfiedGoalHeuristic>();
+// Long-form names for the log. The policy speaks in short labels, but the run
+// logs are a committed artefact and readers know them by these names.
+static const char* heuristic_display(const std::string& label) {
+    if (label == "ug")   return "unsatisfied-goal";
+    if (label == "ed")   return "epistemic-distance";
+    if (label == "ks")   return "knowledge-spread";
+    if (label == "wc")   return "world-count";
+    if (label == "rpg")  return "relaxed-closure (max)";
+    if (label == "radd") return "relaxed-closure (add)";
+    return "unknown";  // unreachable: make_heuristic rejects the label first
 }
 
-// select_strategy — choose search algorithm given task structure.
-//
-// Priority order inside each branch is from most-constrained to least, so
-// that a task matching multiple criteria gets the most specific strategy.
-//
-// Sensing branch (|E_d| > 1 in any action):
-//   AO* is the only algorithm that correctly handles branching on sensing
-//   outcomes. GBFS produces linear plans and cannot represent contingencies.
-//   We prefer AO* whenever the state space is tractable: ed heuristic with
-//   ≤16 designated worlds is the sweet spot from benchmarks.
-//
-// Partial-observability branch:
-//   Gossip, Grapevine, and AMC have private announcements with heterogeneous
-//   observability. These domains have a single designated world but a large
-//   world set (32+) that grows ~1.5× per step — GBFS's world-count threshold
-//   of 16 incorrectly sends them there. The plan is linear (no sensing
-//   branches) but the search space is large; GBFS with KnowledgeSpread is
-//   the right call. We route here before hitting the world-count threshold.
-//
-// KD45 belief with few worlds / designated:
-//   AO* with KnowledgeSpread handles this well even with many ground actions
-//   because the branching factor after bisim contraction is small.
-//
-// EHC:
-//   Cheap and fast for shallow deterministic S5 tasks. Plateau-prone under
-//   KD45 because BFS escape re-expands large belief models; restricted to
-//   !kd45 domains.
-//
-// GBFS fallback:
-//   Large world sets that don't fit the above cases.
-static Strategy select_strategy(const PlanningTask& task) {
-    bool sensing   = has_sensing_actions(task);
-    int  depth     = goal_modal_depth(*task.goal);
-    size_t desg    = task.init.num_designated();
-    size_t worlds  = task.init.num_worlds;
-    size_t actions = task.actions.size();
-
-    if (sensing) {
-        if (desg <= 16)
-            return Strategy::AOSTAR;
-        if (depth >= 2 && desg <= 32)
-            return Strategy::AOSTAR;
-        if (desg <= 8 && actions <= 32)
-            return Strategy::AOSTAR;
-        return Strategy::GBFS;
-    }
-
-    // Private-announcement domains with partial observability (S5 frame) grow
-    // linearly in worlds but have a linear plan structure — GBFS with
-    // KnowledgeSpread is the right call. KD45 partial-obs domains (backdoor,
-    // sally-anne, whisper) need AO* because belief repair after the product
-    // update produces non-trivial conditional structure even with a single
-    // designated event; they fall through to the KD45 guard below.
-    if (task.partial_obs && !task.kd45)
-        return Strategy::GBFS;
-
-    if (task.kd45 && worlds <= 8 && desg <= 4 && depth >= 1)
-        return Strategy::AOSTAR;
-
-    if (!task.kd45 && desg <= 4 && worlds <= 16 && actions <= 12 && depth <= 1)
-        return Strategy::EHC;
-
-    if (worlds > 16)
-        return Strategy::GBFS;
-
-    if (actions > 12)
-        return Strategy::GBFS;
-
-    return Strategy::EHC;
+static std::optional<Strategy> parse_strategy(const std::string& label) {
+    if (label == "gbfs")   return Strategy::GBFS;
+    if (label == "ehc")    return Strategy::EHC;
+    if (label == "aostar") return Strategy::AOSTAR;
+    return std::nullopt;
 }
 
 static const char* strategy_name(Strategy s) {
@@ -230,11 +114,16 @@ static void usage(const char* prog) {
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
         << "  --heuristic    ug | ed | ks | wc | rpg | radd  (default: auto)\n"
+        << "  --strategy     gbfs | ehc | aostar             (default: auto)\n"
+        << "  --policy       Selection-policy JSON; overrides the built-in\n"
+        << "                 rules used to auto-select strategy and heuristic\n"
+        << "  --print-policy Write the effective policy to stdout and exit\n"
+        << "  --explain      Report which rule decided each auto-selection\n"
         << "  --limit        Max nodes / max depth (0 = unlimited)\n"
         << "  --timeout      Timeout in seconds (AO* only)\n"
-        << "  --ehc          Force EHC\n"
-        << "  --gbfs         Force GBFS\n"
-        << "  --conditional  Force AO*\n"
+        << "  --ehc          Force EHC (alias for --strategy ehc)\n"
+        << "  --gbfs         Force GBFS (alias for --strategy gbfs)\n"
+        << "  --conditional  Force AO* (alias for --strategy aostar)\n"
         << "  --help         Show this message\n";
 }
 
@@ -243,13 +132,14 @@ int main(int argc, char* argv[]) {
     std::string task_path;
     std::string plan_path;
     std::string heuristic_name;  // empty = auto
+    std::string strategy_name_arg;
+    std::string policy_path;
 
     size_t limit        = 0;
     size_t timeout_secs = 0;
 
-    bool force_conditional = false;
-    bool force_ehc         = false;
-    bool force_gbfs        = false;
+    bool print_policy = false;
+    bool explain      = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -257,17 +147,37 @@ int main(int argc, char* argv[]) {
         if      (arg == "--task"      && i+1 < argc) task_path      = argv[++i];
         else if (arg == "--plan"      && i+1 < argc) plan_path      = argv[++i];
         else if (arg == "--heuristic" && i+1 < argc) heuristic_name = argv[++i];
+        else if (arg == "--strategy"  && i+1 < argc) strategy_name_arg = argv[++i];
+        else if (arg == "--policy"    && i+1 < argc) policy_path    = argv[++i];
         else if (arg == "--limit"     && i+1 < argc) limit          = std::stoul(argv[++i]);
         else if (arg == "--timeout"   && i+1 < argc) timeout_secs   = std::stoul(argv[++i]);
-        else if (arg == "--conditional") force_conditional = true;
-        else if (arg == "--ehc")         force_ehc         = true;
-        else if (arg == "--gbfs")        force_gbfs        = true;
+        else if (arg == "--print-policy") print_policy      = true;
+        else if (arg == "--explain")      explain           = true;
+        else if (arg == "--conditional")  strategy_name_arg = "aostar";
+        else if (arg == "--ehc")          strategy_name_arg = "ehc";
+        else if (arg == "--gbfs")         strategy_name_arg = "gbfs";
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
             std::cerr << "Unknown argument: " << arg << "\n";
             usage(argv[0]);
             return 1;
         }
+    }
+
+    // Load the policy before anything else: a malformed one is a usage error,
+    // and reporting it after a long parse would be needlessly late.
+    SelectionPolicy policy;
+    try {
+        policy = policy_path.empty() ? SelectionPolicy::builtin()
+                                     : SelectionPolicy::load(policy_path);
+    } catch (const std::exception& e) {
+        std::cerr << "Error in selection policy: " << e.what() << "\n";
+        return 1;
+    }
+
+    if (print_policy) {
+        std::cout << policy.to_json() << "\n";
+        return 0;
     }
 
     if (task_path.empty() || plan_path.empty()) {
@@ -284,27 +194,64 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Heuristic selection: explicit flag overrides auto-select.
-    std::unique_ptr<Heuristic> h;
-    if (!heuristic_name.empty()) {
-        if      (heuristic_name == "ug")   { h = std::make_unique<UnsatisfiedGoalHeuristic>();   std::cerr << "[main] Heuristic: unsatisfied-goal\n"; }
-        else if (heuristic_name == "ed")   { h = std::make_unique<EpistemicDistanceHeuristic>(); std::cerr << "[main] Heuristic: epistemic-distance\n"; }
-        else if (heuristic_name == "ks")   { h = std::make_unique<KnowledgeSpreadHeuristic>();   std::cerr << "[main] Heuristic: knowledge-spread\n"; }
-        else if (heuristic_name == "rpg")  { h = std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Max); std::cerr << "[main] Heuristic: relaxed-closure (max)\n"; }
-        else if (heuristic_name == "radd") { h = std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Add); std::cerr << "[main] Heuristic: relaxed-closure (add)\n"; }
-        else                               { h = std::make_unique<WorldCountHeuristic>();        std::cerr << "[main] Heuristic: world-count\n"; }
-    } else {
-        h = select_heuristic(task);
+    const TaskFeatures features = TaskFeatures::extract(task);
+
+    if (explain) {
+        std::cerr << "[main] Features:";
+        for (auto& n : TaskFeatures::names())
+            std::cerr << ' ' << n << '=' << *features.lookup(n);
+        std::cerr << "\n";
     }
 
-    // Strategy selection: explicit flag overrides auto-select.
-    Strategy strategy;
-    if      (force_conditional) strategy = Strategy::AOSTAR;
-    else if (force_ehc)         strategy = Strategy::EHC;
-    else if (force_gbfs)        strategy = Strategy::GBFS;
-    else {
-        strategy = select_strategy(task);
-        std::cerr << "[main] Strategy: " << strategy_name(strategy) << " (auto)\n";
+    // Heuristic selection: an explicit flag overrides the policy.
+    std::string heuristic_label = heuristic_name;
+    std::string heuristic_rule;
+
+    if (heuristic_label.empty()) {
+        Decision d    = select(policy.heuristic_rules, features);
+        heuristic_label = d.outcome;
+        heuristic_rule  = d.rule;
+    }
+
+    auto h = make_heuristic(heuristic_label);
+    if (!h) {
+        std::cerr << "Error: unknown heuristic '" << heuristic_label << "'; expected one of:";
+        for (auto& l : heuristic_labels()) std::cerr << ' ' << l;
+        std::cerr << "\n";
+        return 1;
+    }
+
+    std::cerr << "[main] Heuristic: " << heuristic_display(heuristic_label);
+    if (!heuristic_rule.empty()) {
+        std::cerr << " (auto";
+        if (explain) std::cerr << ", rule '" << heuristic_rule << "'";
+        std::cerr << ")";
+    }
+    std::cerr << "\n";
+
+    // Strategy selection: an explicit flag overrides the policy.
+    std::string strategy_label = strategy_name_arg;
+    std::string strategy_rule;
+
+    if (strategy_label.empty()) {
+        Decision d     = select(policy.strategy_rules, features);
+        strategy_label = d.outcome;
+        strategy_rule  = d.rule;
+    }
+
+    auto parsed = parse_strategy(strategy_label);
+    if (!parsed) {
+        std::cerr << "Error: unknown strategy '" << strategy_label << "'; expected one of:";
+        for (auto& l : strategy_labels()) std::cerr << ' ' << l;
+        std::cerr << "\n";
+        return 1;
+    }
+    Strategy strategy = *parsed;
+
+    if (!strategy_rule.empty()) {
+        std::cerr << "[main] Strategy: " << strategy_name(strategy) << " (auto";
+        if (explain) std::cerr << ", rule '" << strategy_rule << "'";
+        std::cerr << ")\n";
     }
 
     using Clock = std::chrono::steady_clock;
