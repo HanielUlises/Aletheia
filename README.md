@@ -8,6 +8,10 @@ Built at **UNAM–FI** (Artificial Intelligence Microsoft Lab) / **IPN–ESCOM**
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![ICAPS 2026](https://img.shields.io/badge/ICAPS-2026%20Workshop-orange.svg)](https://www.icaps-conference.org/)
 
+This document describes the design. Building and running the planner is covered
+in [docs/usage.md](docs/usage.md); measured results are in
+[docs/evaluation.md](docs/evaluation.md).
+
 ---
 
 ## Abstract
@@ -240,7 +244,7 @@ For sensing actions the planner must produce a branching policy, one subplan per
 - **Solved subtrees**, keyed by fingerprint and tagged with their height. A cached solution is reused only when its height fits the remaining budget, so the depth bound the current iteration is enforcing is never violated. Reuse turns the output from a plan tree into a plan DAG.
 - **Refuted states**, keyed by fingerprint and tagged with the greatest depth at which failure was proven. Failure at depth $d$ implies failure at every $d' \le d$.
 
-The previous implementation rebuilt its memo table at every depth, so each iteration re-expanded from scratch everything its predecessor had already refuted. The measured effect is a factor of 19.8 in iteration throughput (§10).
+The previous implementation rebuilt its memo table at every depth, so each iteration re-expanded from scratch everything its predecessor had already refuted. The measured effect is a factor of 19.8 in iteration throughput ([evaluation](docs/evaluation.md)).
 
 Persistence requires care, because two kinds of failure are not properties of the state alone. A branch cut because its state is already on the current DFS path, and a branch cut because the deadline expired, are path- and time-dependent respectively; the same state reached by another path, or a moment earlier, may well be solvable. Such failures are marked *tainted* and propagate that mark upward; only untainted failures enter the memo. Solutions are always sound to cache, since a policy from a state depends on nothing but the state.
 
@@ -250,7 +254,11 @@ Action ranking also changed. The previous code ranked actions by running `produc
 
 ## 8. Heuristics
 
-Four goal-decomposition estimates are available, selected automatically from task structure.
+Four goal-decomposition estimates are available, selected automatically from
+task structure by a rule table over features of the task — frame, goal shape,
+model size — that is data rather than control flow, and can be replaced without
+rebuilding ([usage](docs/usage.md)). The same table selects the search
+algorithm of §7.
 
 | | estimate |
 |---|---|
@@ -301,7 +309,7 @@ The suite provides no headroom for a better heuristic, and it is worth stating w
 
 Search cost grows two orders of magnitude across these instances while the number of expansions stays exactly optimal. The time is spent evaluating nodes — product update and contraction over a 128-world model — not choosing between them. The same holds for the conditional instances: `coin4`'s 629 expansions are almost entirely iterative-deepening re-expansion (its memo ends at 6 solved / 20 refuted entries, and only one action is applicable at the root), not misranking.
 
-The conclusion is that further heuristic work should be deferred behind per-node cost and behind replacing iterative deepening in the AND-OR search (§11). A heuristic can only pay once search is actually branching.
+The conclusion is that further heuristic work should be deferred behind per-node cost and behind replacing iterative deepening in the AND-OR search (§10). A heuristic can only pay once search is actually branching.
 
 ---
 
@@ -396,70 +404,13 @@ what an announcement *is* changed.
 
 ---
 
-## 10. Evaluation
-
-Measured on the local benchmark suite, GCC 11.4, `-O3` with LTO, single core. "Before" is the immediately preceding implementation; both binaries solve the same 12 of 14 instances, and produce identical plans on every instance both solve.
-
-### Wall-clock, mean of 20 runs
-
-| instance | before | after | speedup |
-|---|---:|---:|---:|
-| `grapevine1` | 263.4 ms | 8.0 ms | **33.0×** |
-| `coin4` | 92.2 ms | 8.6 ms | **10.7×** |
-| `coin5` | 22.7 ms | 5.2 ms | 4.3× |
-| `coin3` | 21.5 ms | 5.1 ms | 4.1× |
-| `coin2` | 4.2 ms | 3.1 ms | 1.3× |
-| `muddy3` | 2.4 ms | 1.8 ms | 1.3× |
-| `coin1`, `muddy1`, `backdoor`, `sally-anne`, `whisper` | 1.8–3.4 ms | 1.6–3.4 ms | ≈1× |
-
-Instances at the bottom of the table are dominated by process start-up (≈2 ms) and measure nothing about the search.
-
-### Largest solved instance
-
-`gossip1` — 5 agents, 32 initial worlds, private announcements with heterogeneous observability:
-
-| | before | after |
-|---|---:|---:|
-| wall-clock | 151.23 s | **0.04 s** |
-| peak resident memory | 21.0 GB | **7.3 MB** |
-
-The memory figure is the representation change compounding with the search change: bit-matrix models are roughly two orders of magnitude smaller than the hash-table representation, and the closed list now stores 16-byte fingerprints rather than whole models.
-
-### AND-OR search
-
-`amc1` is unsolvable, and both binaries fail on it — but for different reasons.
-Deepening iterations completed in a fixed 20 s budget, which isolates the
-persistent AO\* memo since the work per iteration is otherwise identical:
-
-| before | after | ratio |
-|---:|---:|---:|
-| 13,902 | 275,104 | **19.8×** |
-
-With the exhaustion proof of §9.1 the iteration count stops being the relevant
-number: the instance now terminates at depth 1 in 3 ms with "no solution
-exists", and its run log falls from 7,078 lines to 9.
-
-### Search effort
-
-Canonical duplicate detection reduces expansions where symmetric states occur:
-
-| instance | expansions before | after |
-|---|---:|---:|
-| `coin4` | 715 | 629 |
-| `coin3`, `coin5` | 243 | 221 |
-| all others | — | unchanged |
-
-The reduction is modest on this suite because the benchmark models are small enough that few distinct labellings of the same situation arise. It is expected to matter more on instances with many symmetric agents, where the previous numbering-sensitive hash missed most duplicates.
-
----
-
-## 11. Limitations and further work
+## 10. Limitations and further work
 
 **The world cap is a completeness hole.** It is checked against $\lvert W\rvert \cdot \lvert E\rvert$ before precondition filtering. The surviving count is now cheap to compute exactly — one population count per event over the precondition extension — so the bound should be moved onto the real count, or onto post-contraction size.
 
 **The relaxation is blocked by anti-monotone preconditions.** §8.1: `rpg`/`radd` relax the model rather than the fact set, which is the right direction for DEL, but epistemic preconditions of the form $\neg \mathit{Kw}_i \varphi$ mean that establishing knowledge disables the actions that establish it. A relaxation that survives this needs to track *which* announcements remain available, not just what is known — closer to a landmark decomposition over (agent, proposition) pairs than to a planning graph.
 
-**Refinement is not asymptotically optimal.** §5.4: obtaining both Paige–Tarjan's $O(m \log n)$ and a canonical labelling would require canonicalising the fixpoint partition in a separate pass.
+**Refinement is not asymptotically optimal.** §5.2: obtaining both Paige–Tarjan's $O(m \log n)$ and a canonical labelling would require canonicalising the fixpoint partition in a separate pass.
 
 **Iterative deepening is the wrong outer loop for AND-OR search.** LAO\*, with an explicit AND-OR graph and value iteration over it, avoids re-descending solved regions entirely. The persistent memo recovers part of that benefit but not the ordering.
 
@@ -469,7 +420,7 @@ The reduction is modest on this suite because the benchmark models are small eno
 
 ---
 
-## 12. Implementation notes
+## 11. Implementation notes
 
 The planner is a self-contained C++23 binary. Beyond the algorithmic content above, the following language facilities carry weight in the design:
 
