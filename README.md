@@ -35,9 +35,9 @@ Classical planning assumes a fully observable world: the agent knows exactly whi
 
 An epistemic planning task is a tuple
 
-$$
+```math
 \Pi = \langle \mathcal{M}_0,\ \mathcal{A},\ \varphi_g \rangle
-$$
+```
 
 where $\mathcal{M}_0$ is the initial multi-pointed Kripke model, $\mathcal{A}$ a set of event models, and $\varphi_g$ a modal goal formula. A solution is a sequence (or, under partial observability, a branching policy) of actions whose product updates carry $\mathcal{M}_0$ to a model satisfying $\varphi_g$.
 
@@ -51,23 +51,23 @@ The cost structure differs sharply from classical planning. A classical state is
 
 Fix a finite set of atoms $P$ and agents $Ag$. An **epistemic state** is a multi-pointed Kripke model
 
-$$
+```math
 \mathcal{M} = (W,\ \{R_i\}_{i \in Ag},\ V,\ W^*)
-$$
+```
 
 with $W$ a finite set of worlds, $R_i \subseteq W \times W$ agent $i$'s accessibility relation, $V : W \to 2^P$ a valuation, and $\emptyset \neq W^* \subseteq W$ the *designated* worlds — those the planner considers actual.
 
 The language is the modal fragment
 
-$$
+```math
 \varphi ::= \top \mid \bot \mid p \mid \neg\varphi \mid \varphi \wedge \varphi \mid \varphi \vee \varphi \mid [i]\varphi \mid C_G\varphi \mid \mathit{Kw}_i\varphi
-$$
+```
 
 with the standard semantics, $\mathit{Kw}_i\varphi \equiv [i]\varphi \vee [i]\neg\varphi$ (“$i$ knows whether $\varphi$”), and
 
-$$
+```math
 \mathcal{M} \models \varphi \quad\text{iff}\quad \mathcal{M}, w \models \varphi \ \text{ for every } w \in W^*.
-$$
+```
 
 Frames are $S5_n$ (knowledge) or $KD45_n$ (belief); the latter requires every $R_i$ to be serial, which the product update does not preserve and must therefore repair.
 
@@ -75,14 +75,14 @@ Frames are $S5_n$ (knowledge) or $KD45_n$ (belief); the latter requires every $R
 
 An action is an event model $\mathcal{E} = (E, \{R^E_i\}, \mathit{pre}, \mathit{post}, E_d)$. The product update is
 
-$$
+```math
 \begin{aligned}
 W' &= \{ (w,e) \mid w \in W,\ e \in E,\ \mathcal{M},w \models \mathit{pre}(e) \} \\
 R'_i &= \{ ((w,e),(v,f)) \mid (w,v) \in R_i \ \wedge\ (e,f) \in R^E_i \} \\
 V'(w,e) &= \mathit{post}(e)\ \text{applied to}\ V(w) \\
-W'^* &= \{ (w,e) \mid w \in W^*,\ e \in E_d \}
+{W'}^* &= \{ (w,e) \mid w \in W^*,\ e \in E_d \}
 \end{aligned}
-$$
+```
 
 Postconditions are conditional: an atom flips at $(w,e)$ only if its guard holds at $w$ *in the pre-update model*. Observability is conditional too: each agent carries an ordered list of (guard, event relation) cases, and the first case whose guard holds at $w$ supplies $R^E_i$ there. This is what lets a single action be public for one agent, private for another, and conditional on the state for a third.
 
@@ -106,20 +106,20 @@ Bisimilar worlds satisfy exactly the same formulas, so quotienting by bisimilari
 
 An epistemic state is stored as
 
-| Array        | Shape (in 64-bit words)                                      | Contents                                      |
-|--------------|--------------------------------------------------------------|-----------------------------------------------|
-| `valuation`  | $\|W\| \times \lceil \|P\|/64\rceil$                         | $V$ as a bit matrix, row per world            |
-| `relation`   | $\|Ag\| \times \|W\| \times \lceil \|W\|/64\rceil$           | each $R_i$ as a bit matrix, row per source world |
-| `designated` | $\lceil \|W\|/64\rceil$                                      | $W^*$                                         |
+| Array        | Shape (in 64-bit words) | Contents |
+|--------------|-------------------------|----------|
+| `valuation`  | $`\lvert W\rvert \times \lceil \lvert P\rvert/64\rceil`$ | $V$ as a bit matrix, row per world |
+| `relation`   | $`\lvert Ag\rvert \times \lvert W\rvert \times \lceil \lvert W\rvert/64\rceil`$ | each $R_i$ as a bit matrix, row per source world |
+| `designated` | $`\lceil \lvert W\rvert/64\rceil`$ | $`W^*`$ |
 
 and nothing else. Everything the planner does to a model is then a word-level operation over contiguous memory:
 
 - $p$ holds at $w$: one bit test.
-- $R_i(w) \subseteq S$: $\lceil \|W\|/64\rceil$ ANDNOT tests, *independent of how many successors $w$ has*.
+- $R_i(w) \subseteq S$: $\lceil \lvert W\rvert/64\rceil$ ANDNOT tests, *independent of how many successors $w$ has*.
 - copy a model: three `memcpy`s.
 - hash a model: one linear scan, no pointer chasing.
 
-The previous representation used `std::unordered_set<uint32_t>` for each world's valuation and for each $(agent, world)$ accessibility row. For a 512-world, 5-agent model that is roughly 2,600 independent hash tables. Modal evaluation over it was a pointer chase per successor; here it is a register operation per 64 worlds.
+The previous representation used `std::unordered_set<uint32_t>` for each world's valuation and for each $(\mathit{agent}, \mathit{world})$ accessibility row. For a 512-world, 5-agent model that is roughly 2,600 independent hash tables. Modal evaluation over it was a pointer chase per successor; here it is a register operation per 64 worlds.
 
 The effect is visible in resident memory: on `gossip1` the old representation peaked at **21 GB**, the new one at **7.3 MB**.
 
@@ -137,13 +137,13 @@ The payoff is not memory but memoisation. A task's action preconditions, postcon
 
 For every subformula the planner computes its **extension**
 
-$$
+```math
 \mathit{sat}(\varphi) = \{ w \in W \mid \mathcal{M}, w \models \varphi \} \subseteq W
-$$
+```
 
 bottom-up, as a bit set. The clauses are
 
-$$
+```math
 \begin{aligned}
 \mathit{sat}(p) &= \{ w \mid p \in V(w) \} \\
 \mathit{sat}(\neg\varphi) &= W \setminus \mathit{sat}(\varphi) \\
@@ -152,7 +152,7 @@ $$
 \mathit{sat}(\mathit{Kw}_i\varphi) &= \mathit{sat}([i]\varphi) \ \cup\ \mathit{sat}([i]\neg\varphi) \\
 \mathit{sat}(C_G\varphi) &= \nu X.\ \mathit{sat}(\varphi) \cap \{ w \mid R_G(w) \subseteq X \}
 \end{aligned}
-$$
+```
 
 and goal satisfaction is one subset test: $W^* \subseteq \mathit{sat}(\varphi_g)$.
 
@@ -166,14 +166,14 @@ Three of these clauses replace something structurally worse:
 
 Let $n = |W|$, $m = |Ag|$, and $\omega = 64$.
 
-| Subformula                        | Cost                                              |
-|-----------------------------------|---------------------------------------------------|
-| $p$                               | $O(n)$                                            |
-| $\neg,\ \wedge,\ \vee$            | $O(n/\omega)$ per child                           |
-| $[i]\varphi$, $\mathit{Kw}_i\varphi$ | $O(n^2/\omega)$                                 |
-| $C_G\varphi$                       | $O(k \cdot |G| \cdot n^2/\omega)$, $k \le n$      |
+| Subformula | Cost |
+|------------|------|
+| $p$ | $O(n)$ |
+| $`\neg,\ \wedge,\ \vee`$ | $O(n/\omega)$ per child |
+| $`[i]\varphi`$, $`\mathit{Kw}_i\varphi`$ | $`O(n^2/\omega)`$ |
+| $`C_G\varphi`$ | $`O(k \cdot \lvert G\rvert \cdot n^2/\omega)`$, $`k \le n`$ |
 
-A formula of size $|\varphi|$ over the purely modal fragment therefore costs $O(|\varphi| \cdot n^2/\omega)$ per model, evaluated once and memoised.
+A formula of size $\lvert\varphi\rvert$ over the purely modal fragment therefore costs $O(\lvert\varphi\rvert \cdot n^2/\omega)$ per model, evaluated once and memoised.
 
 ---
 
@@ -207,7 +207,7 @@ Three costs dominated the previous implementation and are removed here.
 
 **Iteration is in index order.** The relation was previously built by iterating the hash map, visiting source worlds in essentially arbitrary order. It now runs in index order, so each source world's accessibility row is read once and stays in cache across that world's events.
 
-**Sensing branches share the model.** For a sensing action, the branch for event $e_k$ differs from its siblings only in $W'^*_k = \lbrace (w,e_k) \mid w \in W^* \rbrace$. All branches are derived from one shared update, which also keeps their world indices mutually coherent — running the update once per event would compact indices independently and leave each branch's designated set referring to different worlds. Branch order is sorted by event index so that the emitted conditional plan is deterministic.
+**Sensing branches share the model.** For a sensing action, the branch for event $e_k$ differs from its siblings only in $`{W'}^*_k = \lbrace (w,e_k) \mid w \in W^* \rbrace`$. All branches are derived from one shared update, which also keeps their world indices mutually coherent — running the update once per event would compact indices independently and leave each branch's designated set referring to different worlds. Branch order is sorted by event index so that the emitted conditional plan is deterministic.
 
 **KD45 repair.** $R_i$ is not serial after a product update: $(w,e)$ is non-serial for $i$ whenever $R_i(w) = \emptyset$ or $R^E_i(e) = \emptyset$, and removal cascades because a removed world may have been another's only successor. The surviving set is the greatest fixpoint of "every agent's row, restricted to survivors, is non-empty", computed by repeated sweeps over the bit matrix; survivors are then compacted and the pair table patched through the remapping.
 
@@ -254,10 +254,10 @@ Four goal-decomposition estimates are available, selected automatically from tas
 
 | | estimate |
 |---|---|
-| `wc` | $\lvert W^*\rvert$ — uncertainty as raw world count |
+| `wc` | $`\lvert W^*\rvert`$ — uncertainty as raw world count |
 | `ug` | number of unsatisfied top-level goal conjuncts |
-| `ed` | *epistemic distance*: for an unsatisfied $[i]\varphi$, the fraction of worlds $i$ considers possible that are counterexamples to $\varphi$; nested modalities are handled by projecting $W^*$ through $R_i$ and recursing |
-| `ks` | *knowledge spread*: the same measure specialised to conjunctions of $\mathit{Kw}$ goals across agents, where it tracks knowledge propagating through the agent graph |
+| `ed` | *epistemic distance*: for an unsatisfied $`[i]\varphi`$, the fraction of worlds $i$ considers possible that are counterexamples to $\varphi$; nested modalities are handled by projecting $`W^*`$ through $R_i$ and recursing |
+| `ks` | *knowledge spread*: the same measure specialised to conjunctions of $`\mathit{Kw}`$ goals across agents, where it tracks knowledge propagating through the agent graph |
 
 `ed` and `ks` improve on `ug` by giving a real-valued gradient where `ug` sees only 0 or 1 per conjunct. Both cut their counterexample scan off after a fixed number of accessible worlds to bound cost on wide models.
 
@@ -271,13 +271,17 @@ None of the four solves a relaxed problem, so none of them estimates a *distance
 
 The classical delete-relaxation does not transfer. In classical planning one drops delete effects because progress is monotone growth of a fact set. In DEL the actions that establish knowledge carry no ontic effect at all: they make progress by *eliminating* possibilities. The monotone quantity is therefore the model, shrinking rather than growing, and two things shrink:
 
-$$W_{k+1} \ =\ W_k \cap \bigcap \\, \lbrace \mathit{sat}(\mathit{pre}(e)) \ \mid\ a \in \mathcal{A},\ e \in E_d(a) \rbrace$$
+```math
+W_{k+1} \ =\ W_k \cap \bigcap \, \lbrace \mathit{sat}(\mathit{pre}(e)) \ \mid\ a \in \mathcal{A},\ e \in E_d(a) \rbrace
+```
 
-$$R_i \ \leftarrow\ R_i \setminus \big( \mathit{sat}(\mathit{pre}(e)) \times \mathit{sat}(\mathit{pre}(f)) \big) \quad \text{whenever } i \text{ distinguishes } e \text{ from } f$$
+```math
+R_i \ \leftarrow\ R_i \setminus \big( \mathit{sat}(\mathit{pre}(e)) \times \mathit{sat}(\mathit{pre}(f)) \big) \quad \text{whenever } i \text{ distinguishes } e \text{ from } f
+```
 
 The second term is the essential one. Under a private announcement no world is eliminated at all — an agent who observes which event occurred simply loses the edges between worlds the two events separate. A relaxation that only prunes worlds reaches its fixpoint at layer zero on Gossip and Grapevine and reports nothing.
 
-The layer at which each goal conjunct first becomes true is then a step count, aggregated as `rpg` (max, a lower bound) or `radd` (sum, assuming conjunct independence). Cost is $O(L \cdot \lvert \mathcal{A}\rvert \cdot \lvert E\rvert \cdot \lvert\varphi\rvert \cdot n^2/\omega)$ with $L \le \lvert W\rvert$ layers.
+The layer at which each goal conjunct first becomes true is then a step count, aggregated as `rpg` (max, a lower bound) or `radd` (sum, assuming conjunct independence). Cost is $`O(L \cdot \lvert \mathcal{A}\rvert \cdot \lvert E\rvert \cdot \lvert\varphi\rvert \cdot n^2/\omega)`$ with $L \le \lvert W\rvert$ layers.
 
 **Measured, it does not help on this suite, and the reason is structural.** Epistemic action preconditions are typically *anti*-monotone: `tell_A_B` in Gossip requires $\mathit{secret}_A \wedge \neg \mathit{Kw}_B(\mathit{secret}_A)$, so establishing knowledge *disables* the actions that establish it. The delete-relaxation's founding assumption — that achieving a fact never removes an option — is violated by construction. On Gossip the closure fires every action in one layer and returns a constant.
 
@@ -357,7 +361,9 @@ that the speaker does *not* know the other's number. One event makes it an ontic
 action, so conformant applicability requires the precondition to hold at every
 designated world (§2.2, §7). In cn-5 it does not:
 
-$$\mathit{sat}(\mathit{pre}(\texttt{ann-A-B})) = \lbrace w_0, w_1, w_2, w_3 \rbrace, \qquad W^* = \lbrace w_3, w_4 \rbrace$$
+```math
+\mathit{sat}(\mathit{pre}(\texttt{ann-A-B})) = \lbrace w_0, w_1, w_2, w_3 \rbrace, \qquad W^* = \lbrace w_3, w_4 \rbrace
+```
 
 A knows B's number in one actual world and not in the other, so the action is
 never applicable, the other announcement prunes nothing, and the task reaches a
