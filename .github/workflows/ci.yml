@@ -1,0 +1,58 @@
+name: CI
+
+# The release workflow only fires on a tag, which made a tag push the first
+# time the build was ever exercised — and by then the tag is already public.
+# This runs the same build and the smoke suite on every push and PR.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake build-essential nlohmann-json3-dev
+
+      - name: Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+
+      - name: Smoke suite
+        # build_test.sh exits non-zero if any instance fails. Instances whose
+        # reference plan is `null` are expected to report no solution and pass
+        # on that basis; producing a plan for one is a failure.
+        run: ./build_test.sh --no-build --timeout 60
+
+      - name: Selection policy round-trip
+        # The built-in policy must survive a dump/reload cycle: --print-policy
+        # output is the documented starting point for retuning, so if it does
+        # not load back the docs are wrong.
+        run: |
+          ./build/epistemic_planner --print-policy > /tmp/policy.json
+          ./build/epistemic_planner \
+            --task benchmarks/coin4/problem_4.json \
+            --plan /tmp/coin4.json \
+            --policy /tmp/policy.json \
+            --explain
+          test -s /tmp/coin4.json
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: smoke-logs/
+          if-no-files-found: warn

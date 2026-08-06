@@ -139,7 +139,22 @@ for i in "${!TASKS[@]}"; do
     FALLBACK=$(grep -oP '\[main\] .*falling back.*' "$LOG" | head -1 || true)
     DEPTH=$(grep -oP '(?:depth |Trying depth )\K[0-9]+' "$LOG" | tail -1 || true)
     EXPANDED=$(grep -oP 'Expanded=\K[0-9]+' "$LOG" | tail -1 || true)
-    TIMEOUT_HIT=$(grep -c 'TIMEOUT' "$LOG" 2>/dev/null || echo 0)
+
+    # grep -c prints "0" *and* exits 1 when there are no matches, so a
+    # `$(grep -c ... || echo 0)` substitution yields "0\n0" and the arithmetic
+    # test below dies with a syntax error. Test the exit status instead.
+    TIMEOUT_HIT=0
+    grep -q 'TIMEOUT' "$LOG" 2>/dev/null && TIMEOUT_HIT=1
+
+    # Some instances are unsolvable and the benchmark says so: their reference
+    # plan is the literal `null`. For those, "no solution" is the correct
+    # answer and producing a plan would be the bug — so the oracle is the
+    # reference file, not a hardcoded list of instance names.
+    EXPECT_NULL=0
+    REF_PLAN="$(dirname "$TASK")/plan.json"
+    if [[ -f "$REF_PLAN" ]] && [[ "$(tr -d '[:space:]' < "$REF_PLAN")" == "null" ]]; then
+        EXPECT_NULL=1
+    fi
 
     STATS=""
     [[ -n "$DEPTH" ]]    && STATS="${STATS} depth=${DEPTH}"
@@ -147,15 +162,20 @@ for i in "${!TASKS[@]}"; do
     STATS="${STATS} (${ELAPSED}ms)"
 
     if [[ "$PLAN_CONTENT" == "null" || -z "$PLAN_CONTENT" ]]; then
-        echo -e "${RED}FAIL${RESET}  ${NAME}${STATS}"
-        if [[ $TIMEOUT_HIT -gt 0 ]]; then
-            echo "        → timeout"
+        if [[ $EXPECT_NULL -eq 1 ]]; then
+            echo -e "${GREEN}PASS${RESET}  ${NAME}  [unsolvable, as expected]${STATS}"
+            (( PASS++ )) || true
         else
-            LAST=$(tail -3 "$LOG" | tr '\n' ' ')
-            echo "        → $LAST"
+            echo -e "${RED}FAIL${RESET}  ${NAME}${STATS}"
+            if [[ $TIMEOUT_HIT -gt 0 ]]; then
+                echo "        → timeout"
+            else
+                LAST=$(tail -3 "$LOG" | tr '\n' ' ')
+                echo "        → $LAST"
+            fi
+            (( FAIL++ )) || true
+            FAILED_NAMES+=("$NAME")
         fi
-        (( FAIL++ )) || true
-        FAILED_NAMES+=("$NAME")
     else
         if echo "$PLAN_CONTENT" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if isinstance(d,dict) and 'action' in d else 1)" 2>/dev/null; then
             PLAN_TYPE="conditional"
@@ -163,8 +183,18 @@ for i in "${!TASKS[@]}"; do
             N=$(echo "$PLAN_CONTENT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "?")
             PLAN_TYPE="linear(${N})"
         fi
-        echo -e "${GREEN}PASS${RESET}  ${NAME}  [${PLAN_TYPE}]${STATS}"
-        (( PASS++ )) || true
+
+        if [[ $EXPECT_NULL -eq 1 ]]; then
+            # A plan where the benchmark says none exists is a soundness bug,
+            # not a win — it must not be reported as a pass.
+            echo -e "${RED}FAIL${RESET}  ${NAME}  [${PLAN_TYPE}]${STATS}"
+            echo "        → reference plan is null, but a plan was produced"
+            (( FAIL++ )) || true
+            FAILED_NAMES+=("$NAME")
+        else
+            echo -e "${GREEN}PASS${RESET}  ${NAME}  [${PLAN_TYPE}]${STATS}"
+            (( PASS++ )) || true
+        fi
     fi
 
     rm -f "$PLAN"

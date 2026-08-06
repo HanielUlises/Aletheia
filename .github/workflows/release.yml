@@ -23,17 +23,29 @@ jobs:
       - name: Build
         run: |
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
+          cmake --build build -j"$(nproc)"
+
+      - name: Smoke suite
+        # Gate the release on the same suite CI runs. A tag that does not pass
+        # should not produce a downloadable artefact.
+        run: ./build_test.sh --no-build --timeout 60
 
       - name: Package
         run: |
-          mkdir -p dist
+          mkdir -p dist/docs
           cp build/epistemic_planner dist/
           cp aletheia.sh serialize.py dist/
+          cp README.md LICENSE dist/
+          cp docs/usage.md docs/evaluation.md dist/docs/
           tar -czf aletheia-linux-x86_64.tar.gz -C dist .
+          sha256sum aletheia-linux-x86_64.tar.gz > aletheia-linux-x86_64.tar.gz.sha256
+          cat aletheia-linux-x86_64.tar.gz.sha256
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: aletheia-linux-x86_64.tar.gz
+          files: |
+            aletheia-linux-x86_64.tar.gz
+            aletheia-linux-x86_64.tar.gz.sha256
+          fail_on_unmatched_files: true
           generate_release_notes: true
