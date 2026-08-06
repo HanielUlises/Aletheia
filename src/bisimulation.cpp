@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <vector>
 
-// ─────────────────────────────────────────────────────────────────────────────
+
 // Contraction = reachability restriction + ordered partition refinement.
 //
 // Two worlds w, v of a multi-pointed model are bisimilar when
@@ -21,7 +21,7 @@
 // planning situations. Keeping it costs at most a coarser contraction and buys
 // a sound structural identity.
 //
-// ── Why ordered refinement rather than Paige–Tarjan ─────────────────────────
+//  Why ordered refinement rather than Paige–Tarjan 
 //
 // Paige–Tarjan refines in O(m log n), asymptotically better than the O(r·(m +
 // n log n)) loop below (r = number of rounds, bounded by n but in practice
@@ -43,7 +43,7 @@
 // The fixpoint test is exact: since the round-k key begins with the round-(k-1)
 // class, sorting is order-preserving on the previous partition, so ids are
 // stable and "no class split" is exactly "assignment unchanged".
-// ─────────────────────────────────────────────────────────────────────────────
+
 
 namespace {
 
@@ -133,7 +133,7 @@ EpistemicState bisim_contract(EpistemicState s) {
         return id + 1;
     };
 
-    // ── Round 0: valuation and designation ──────────────────────────────────
+    //  Round 0: valuation and designation ─
     {
         key_data.clear();
         for (WorldIdx w = 0; w < nw; ++w) {
@@ -150,7 +150,7 @@ EpistemicState bisim_contract(EpistemicState s) {
         class_of.swap(next_class);
     }
 
-    // ── Rounds 1..: split on neighbour classes ──────────────────────────────
+    //  Rounds 1..: split on neighbour classes ─
     std::int32_t num_classes = *std::max_element(class_of.begin(), class_of.end()) + 1;
 
     for (;;) {
@@ -181,7 +181,7 @@ EpistemicState bisim_contract(EpistemicState s) {
         num_classes = count;
     }
 
-    // ── Quotient ────────────────────────────────────────────────────────────
+    //  Quotient 
     //
     // Class ids are already canonical, so world c of the result is class c.
     std::vector<WorldIdx> repr(num_classes, kNoWorld);
