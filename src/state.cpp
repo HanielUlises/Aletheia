@@ -4,7 +4,7 @@
 #include <cassert>
 #include <iostream>
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // Satisfaction-set model checking
 //
 // The previous evaluator was a per-world recursive descent: holds_at(φ, w)
@@ -31,7 +31,7 @@
 // hash-consed the memo is shared across every occurrence of a subformula
 // anywhere in the task: a precondition that also appears as an observability
 // guard is computed once.
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 
 class SatCache {
 public:
@@ -198,9 +198,9 @@ private:
     }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 // EpistemicState
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 
 EpistemicState::EpistemicState() = default;
 
@@ -286,7 +286,7 @@ bool EpistemicState::satisfies(const Formula& f) const {
     return bits::subset_of(designated_bits(), sat(f));
 }
 
-// ── Identity ────────────────────────────────────────────────────────────────
+//  Identity 
 
 Fingerprint EpistemicState::fingerprint() const {
     if (fp_) return *fp_;
@@ -324,7 +324,7 @@ bool EpistemicState::operator==(const EpistemicState& o) const noexcept {
            designated == o.designated;
 }
 
-// ── Restriction ─────────────────────────────────────────────────────────────
+//  Restriction ─
 
 EpistemicState restrict_state(const EpistemicState& s,
                               bits::ConstWordSpan keep,
@@ -363,7 +363,7 @@ EpistemicState restrict_state(const EpistemicState& s,
     return out;
 }
 
-// ── Debug output ────────────────────────────────────────────────────────────
+//  Debug output 
 
 void EpistemicState::print(const std::vector<std::string>& atom_names,
                            const std::vector<std::string>& agent_names) const {

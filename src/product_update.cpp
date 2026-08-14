@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <vector>
 
-// ─────────────────────────────────────────────────────────────────────────────
 // DEL product update  M ⊗ A
 //
 // Given M = (W, {R_i}, V, W*) and an event model A = (E, {R^E_i}, pre, post, E_d):
@@ -23,7 +22,6 @@
 // fully observing, R^E_i(e) = E, which over-approximates uncertainty and is
 // therefore safe.
 //
-// ── What changed ────────────────────────────────────────────────────────────
 //
 // Three costs dominated the previous implementation, all of them removed here.
 //
@@ -41,7 +39,6 @@
 // 3. Iteration ran over the hash map, visiting source worlds in essentially
 //    random order. It now runs in index order, so the source model's
 //    accessibility rows are walked sequentially.
-// ─────────────────────────────────────────────────────────────────────────────
 
 namespace {
 
@@ -109,7 +106,7 @@ EventPrecomputation precompute(const EpistemicState& s, const Action& a) {
     return p;
 }
 
-// ── KD45 seriality repair ───────────────────────────────────────────────────
+// KD45 seriality 
 //
 // KD45 requires every R_i to be serial: ∀w ∃v. w R_i v. The product does not
 // preserve seriality — (w,e) is non-serial for agent i whenever R_i(w) = ∅ or
@@ -154,7 +151,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
     const EventPrecomputation p = precompute(s, a);
 
-    // ── W' ──────────────────────────────────────────────────────────────────
+    // W'
     ProductUpdateResult out;
     out.num_events = ne;
     out.pair_to_idx.assign(std::size_t(nw) * ne, kNoWorld);
@@ -191,7 +188,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
             if (bits::test(ext, w)) bits::reset(dst, atom);
     }
 
-    // ── W'* ─────────────────────────────────────────────────────────────────
+    // W'* 
     {
         auto des = result.designated_bits();
         bits::for_each(s.designated_bits(), [&](std::uint32_t w) {
@@ -205,7 +202,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
             return pruned<ProductUpdateResult>(PruneReason::Inapplicable);
     }
 
-    // ── R'_i ────────────────────────────────────────────────────────────────
+    // R'_i
     //
     //   R'_i((w,e)) = { (v,f) | v ∈ R_i(w), f ∈ R^E_i(e) }
     //
@@ -255,7 +252,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
     result.invalidate();
 
-    // ── KD45 repair ─────────────────────────────────────────────────────────
+    // KD45 repair 
     if (enforce_kd45) {
         const auto alive = serial_core(result);
 
@@ -287,7 +284,7 @@ product_update(const EpistemicState& s, const Action& a,
     return ok(std::move(res->state));
 }
 
-// ── Sensing ─────────────────────────────────────────────────────────────────
+// Sensing 
 //
 // For a sensing action with E_d = {e₁, …}, the branch for e_k is the epistemic
 // state given that e_k fired. All branches share the product model W' and R';
