@@ -1,7 +1,8 @@
 # Evaluation
 
 Measured results for the implementation described in the [main README](../README.md).
-Section references below (§n) point into that document.
+Section references below (§n) point into that document. The doxastic (KD45)
+instances are reported separately in [kd45.md](kd45.md).
 
 Measured on the local benchmark suite, GCC 11.4, `-O3` with LTO, single core.
 "Before" is the immediately preceding implementation; both binaries solve the
