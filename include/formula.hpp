@@ -53,3 +53,18 @@ struct Formula {
 // Number of distinct interned formulas. Evaluators size their memo tables from
 // this; it only ever grows, and stops growing once parsing is complete.
 [[nodiscard]] std::size_t formula_universe_size() noexcept;
+
+// Drop every interned formula and restart identifier numbering at zero.
+//
+// A one-shot process never needs this: the registry is sized by one task and
+// dies with it. A long-lived host that solves many tasks in-process does — the
+// registry is global and otherwise accumulates every formula of every task
+// solved, for the life of the process.
+//
+// Safe only when no FormulaPtr from a previous task is still in use. Formulas
+// are shared_ptr, so surviving references stay valid, but identifier numbering
+// restarts and any memo table indexed by formula id would silently alias.
+// Call it after the PlanningTask and every derived state have been destroyed.
+//
+// Not thread-safe, like the rest of the registry: no two solves may overlap.
+void formula_registry_reset() noexcept;

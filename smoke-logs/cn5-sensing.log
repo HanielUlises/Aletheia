@@ -1,0 +1,11 @@
+[parser] Frame: S5 (knowledge)
+[parser] Loaded: 48 atoms, 2 agents, 5 worlds (2 designated), 2 actions  partial_obs=0  goal_kw_only=1
+[main] Heuristic: epistemic-distance
+[main] Strategy: AO* (auto)
+[main] Mode: AO*
+[aostar] Trying depth 0
+[aostar] Trying depth 1
+[aostar] Trying depth 2
+[aostar] Solution found at depth 2  Expanded=13  Generated=11  Memo=2/1
+[main] Conditional plan written to /tmp/aletheia-plan-ckmFHf.json
+[validator] OK — 2 leaves, 2 branches checked

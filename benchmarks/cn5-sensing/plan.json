@@ -1,0 +1,21 @@
+{
+  "action": "ann_A_B",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": null
+    },
+    {
+      "event": 1,
+      "subtree": {
+        "action": "ann_B_A",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": null
+          }
+        ]
+      }
+    }
+  ]
+}

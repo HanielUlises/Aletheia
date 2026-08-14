@@ -4,4 +4,4 @@
 [main] Strategy: GBFS (auto)
 [main] Mode: GBFS
 [gbfs] Solution found. Length=20  Expanded=20  Generated=210  Closed=210  PeakStateBytes=2867152
-[main] Plan written to /tmp/aletheia-plan-KyvEpr.json
+[main] Plan written to /tmp/aletheia-plan-LANyML.json

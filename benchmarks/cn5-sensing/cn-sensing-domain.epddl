@@ -1,0 +1,44 @@
+(define (domain consecutive-numbers-sensing)
+    (:requirements :typing :equality :list-comprehensions :facts :general-preconditions)
+
+    (:types
+        number
+        even - number
+        odd - number
+    )
+
+    (:predicates
+        (has ?i - agent ?n - number)
+        (:fact consecutive ?m ?n - number)
+    )
+
+    ;; The two possible answers to "do you know the other's number?".
+    ;;
+    ;; The original domain declares only the negative event, which makes the
+    ;; announcement an ontic action: under conformant semantics it is applicable
+    ;; only when its precondition holds at *every* designated world. In cn-5 it
+    ;; does not — A knows B's number in one actual world and not in the other —
+    ;; so the action is never applicable and the task has no conformant solution.
+    ;;
+    ;; The puzzle's announcement is really an observation: the other agent hears
+    ;; which answer was given. Declaring both events makes it public sensing, the
+    ;; planner branches on the answer, and the task becomes solvable.
+    (:event e-ann-pos
+        :parameters (?i ?j - agent)
+        :precondition
+            (exists (?n - number)
+                ([?i] (has ?j ?n)) )
+    )
+
+    (:event e-ann-neg
+        :parameters (?i ?j - agent)
+        :precondition
+            (forall (?n - number)
+                (not ([?i] (has ?j ?n))) )
+    )
+
+    (:action ann
+        :parameters (?i ?j - agent | (/= ?i ?j))
+        :action-type (public-sensing (e-ann-pos ?i ?j) (e-ann-neg ?i ?j))
+    )
+)
