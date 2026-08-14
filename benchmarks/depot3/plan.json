@@ -1,0 +1,25 @@
+{
+  "action": "go_chief_bay3_bay2",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": {
+        "action": "go_chief_bay2_bay1",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": {
+              "action": "relocate_chief_c1_bay1_bay2",
+              "branches": [
+                {
+                  "event": 0,
+                  "subtree": null
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

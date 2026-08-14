@@ -1,0 +1,236 @@
+;; ---------------------------------------------------------------------------
+;; Doxastic Depot  --  a KD45_n (belief) domain for EPDDL / plank.
+;;
+;; A depot of bays connected by an adjacency graph.  Robots carry crates
+;; between bays.  Every crate relocation is *private*: only the agents standing
+;; in the source bay observe it, everybody else stays oblivious and therefore
+;; keeps believing the crate is where it used to be.  Those stale beliefs are
+;; false beliefs, so the accessibility relations lose reflexivity after the
+;; first relocation and the state space is KD45_n rather than S5_n.
+;;
+;; The domain deliberately offers the whole doxastic toolbox:
+;;   - ontic change, public (go, seal) and private (relocate)
+;;   - sensing, private (peek) and semi-private (inspect)
+;;   - announcements, public (broadcast), private (whisper) and
+;;     quasi-private (brief)
+;; so an instance can create, propagate, and repair false beliefs.
+;; ---------------------------------------------------------------------------
+
+(define (domain doxastic-depot)
+
+    (:requirements
+        :KD45-frames
+        :typing
+        :facts
+        :ontic-actions
+        :partial-observability
+        :multi-pointed-models
+        :lists :list-comprehensions :equality
+        :negative-preconditions
+        :existential-preconditions
+        :modal-preconditions
+        :negative-obs-conditions
+        :existential-obs-conditions
+        :disjunctive-obs-conditions
+    )
+
+    (:action-type-libraries intermediate)
+
+    (:types crate bay)
+
+    (:predicates
+        (at-ag    ?i - agent ?b - bay)
+        (at       ?c - crate ?b - bay)
+        (sealed   ?c - crate)
+        ;; Facts (rigid, never changed by any event)
+        (:fact adjacent ?b1 ?b2 - bay)
+        (:fact office   ?b      - bay)
+    )
+
+    (:event nil)
+
+    ;--------------------GO------------------
+    ;; Walking around the depot is out in the open: positions stay common
+    ;; knowledge, which keeps the interesting uncertainty on the crates.
+
+    (:event e-go
+        :parameters (?i - agent ?from ?to - bay)
+        :precondition
+            (and (at-ag ?i ?from) (not (at-ag ?i ?to)) (adjacent ?from ?to))
+        :effects
+            (:and (not (at-ag ?i ?from)) (at-ag ?i ?to))
+    )
+
+    (:action go
+        :parameters (?i - agent ?from ?to - bay)
+        :action-type (public-ontic (e-go ?i ?from ?to))
+        :observability-conditions (default Fully)
+    )
+
+    ;--------------------RELOCATE------------------
+    ;; The false-belief generator: ?i carries ?c to an adjacent bay while only
+    ;; the agents sharing ?i's bay can see it happen.
+
+    (:event e-relocate
+        :parameters (?i - agent ?c - crate ?from ?to - bay)
+        :precondition
+            (and (at-ag ?i ?from) (at ?c ?from) (not (sealed ?c)) (adjacent ?from ?to))
+        :effects
+            (:and (not (at ?c ?from)) (at ?c ?to))
+    )
+
+    (:action relocate
+        :parameters (?i - agent ?c - crate ?from ?to - bay)
+        :action-type (private-ontic (e-relocate ?i ?c ?from ?to) (nil))
+        :observability-conditions
+            (:and
+                (?i Fully)
+                (:forall (?j - agent | (/= ?j ?i))
+                    (?j (if (at-ag ?j ?from) Fully else Oblivious))
+                )
+            )
+    )
+
+    ;--------------------SEAL------------------
+    ;; A public ontic action: sealing a crate is logged depot-wide, so everyone
+    ;; learns the crate is sealed without learning where it is.
+
+    (:event e-seal
+        :parameters (?c - crate)
+        :precondition (not (sealed ?c))
+        :effects (sealed ?c)
+    )
+
+    (:action seal
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :action-type (public-ontic (e-seal ?c))
+        :observability-conditions (default Fully)
+    )
+
+    ;--------------------PEEK------------------
+    ;; Fully private sensing: ?i looks around its own bay.  Nobody else even
+    ;; notices, so their (possibly false) beliefs are untouched.
+
+    (:event e-peek-pos
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at-ag ?i ?b) (at ?c ?b))
+    )
+
+    (:event e-peek-neg
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at-ag ?i ?b) (not (at ?c ?b)))
+    )
+
+    (:action peek
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :action-type (private-sensing (e-peek-pos ?i ?c ?b)
+                                      (e-peek-neg ?i ?c ?b)
+                                      (nil))
+        :observability-conditions
+            (:and
+                (?i Fully)
+                (default Oblivious)
+            )
+    )
+
+    ;--------------------INSPECT------------------
+    ;; Semi-private sensing: ?i checks a crate in front of the whole bay.  The
+    ;; bystanders in that bay see that an inspection happened but not its
+    ;; outcome, everybody else is oblivious.
+
+    (:event e-inspect-pos
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at-ag ?i ?b) (at ?c ?b))
+    )
+
+    (:event e-inspect-neg
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at-ag ?i ?b) (not (at ?c ?b)))
+    )
+
+    (:action inspect
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :action-type (quasi-private-sensing (e-inspect-pos ?i ?c ?b)
+                                            (e-inspect-neg ?i ?c ?b)
+                                            (nil))
+        :observability-conditions
+            (:and
+                (?i Fully)
+                (:forall (?j - agent | (/= ?j ?i))
+                    (?j (if (at-ag ?j ?b) Partially else Oblivious))
+                )
+            )
+    )
+
+    ;--------------------BROADCAST------------------
+    ;; Truthful public announcement over the depot intercom.  This is the
+    ;; belief-repair action: it makes the crate's location common knowledge.
+
+    (:event e-broadcast
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at ?c ?b) ([?i] (at ?c ?b)))
+    )
+
+    (:event e-broadcast-neg
+        :parameters (?c - crate ?b - bay)
+        :precondition (not (at ?c ?b))
+    )
+
+    (:action broadcast
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :action-type (public-announcement (e-broadcast ?i ?c ?b)
+                                          (e-broadcast-neg ?c ?b))
+        :observability-conditions (default Fully)
+    )
+
+    ;--------------------WHISPER------------------
+    ;; Truthful private announcement: only the agents in ?i's bay hear it, the
+    ;; rest of the depot keeps whatever it believed.
+
+    (:event e-whisper
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at ?c ?b) ([?i] (at ?c ?b)))
+    )
+
+    (:action whisper
+        :parameters (?i - agent ?c - crate ?b - bay ?room - bay)
+        :action-type (private-announcement (e-whisper ?i ?c ?b) (nil))
+        :observability-conditions
+            (:and
+                (?i Fully)
+                (:forall (?j - agent | (/= ?j ?i))
+                    (?j (if (and (at-ag ?i ?room) (at-ag ?j ?room)) Fully else Oblivious))
+                )
+            )
+    )
+
+    ;--------------------BRIEF------------------
+    ;; Quasi-private announcement: the addressee ?j learns the location, the
+    ;; other agents in the bay only learn that ?i told ?j *something* about
+    ;; ?c, and the rest of the depot notices nothing at all.
+
+    (:event e-brief
+        :parameters (?i - agent ?c - crate ?b - bay)
+        :precondition (and (at ?c ?b) ([?i] (at ?c ?b)))
+    )
+
+    (:event e-brief-neg
+        :parameters (?c - crate ?b - bay)
+        :precondition (not (at ?c ?b))
+    )
+
+    (:action brief
+        :parameters (?i ?j - agent ?c - crate ?b ?room - bay | (/= ?i ?j))
+        :action-type (quasi-private-announcement (e-brief ?i ?c ?b)
+                                                 (e-brief-neg ?c ?b)
+                                                 (nil))
+        :observability-conditions
+            (:and
+                (?i Fully)
+                (?j Fully)
+                (:forall (?k - agent | (and (/= ?k ?i) (/= ?k ?j)))
+                    (?k (if (and (at-ag ?i ?room) (at-ag ?k ?room)) Partially else Oblivious))
+                )
+            )
+    )
+)

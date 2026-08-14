@@ -1,0 +1,17 @@
+{
+  "action": "go_chief_bay1_bay2",
+  "branches": [
+    {
+      "event": 0,
+      "subtree": {
+        "action": "relocate_rob1_c1_bay1_bay2",
+        "branches": [
+          {
+            "event": 0,
+            "subtree": null
+          }
+        ]
+      }
+    }
+  ]
+}

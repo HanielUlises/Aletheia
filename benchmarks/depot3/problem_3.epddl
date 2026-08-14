@@ -1,0 +1,66 @@
+;; Doxastic Depot 3 -- create a false belief, then repair it.
+;;
+;; The chief sits in the office (bay3) and cannot see the floor.  Moving c1
+;; leaves the chief with a stale, false belief; the goal demands that the new
+;; location be common knowledge again, which forces a public announcement.
+;;
+;; Expected plan (length 2):
+;;   (relocate rob1 c1 bay1 bay2)   -- chief is oblivious: false belief
+;;   (broadcast rob1 c1 bay2)       -- intercom: belief repaired into CK
+
+(define (problem depot-3)
+    (:domain doxastic-depot)
+
+    (:requirements
+        :KD45-frames
+        :finitary-S5-theories
+        :common-knowledge
+        :modal-goals
+        :negative-goals
+        :negative-preconditions
+        :facts
+    )
+
+    (:agents chief rob1 rob2)
+
+    (:objects bay1 bay2 bay3 - bay
+              c1 c2 - crate
+    )
+
+    (:facts-init
+        (adjacent bay1 bay2) (adjacent bay2 bay1)
+        (adjacent bay2 bay3) (adjacent bay3 bay2)
+        (office bay3)
+    )
+
+    (:init
+        (:and
+            ;; The chief is in the office, the robots are on the floor
+            (at-ag chief bay3) (not (at-ag chief bay1)) (not (at-ag chief bay2))
+            (at-ag rob1 bay1) (not (at-ag rob1 bay2)) (not (at-ag rob1 bay3))
+            (at-ag rob2 bay1) (not (at-ag rob2 bay2)) (not (at-ag rob2 bay3))
+            (at c1 bay1) (not (at c1 bay2)) (not (at c1 bay3))
+            (at c2 bay3) (not (at c2 bay1)) (not (at c2 bay2))
+            (not (sealed c1)) (not (sealed c2))
+            ([C. All]
+                (and (at-ag chief bay3) (not (at-ag chief bay1)) (not (at-ag chief bay2))
+                     (at-ag rob1 bay1) (not (at-ag rob1 bay2)) (not (at-ag rob1 bay3))
+                     (at-ag rob2 bay1) (not (at-ag rob2 bay2)) (not (at-ag rob2 bay3))
+                )
+            )
+            ([C. All]
+                (and (at c1 bay1) (not (at c1 bay2)) (not (at c1 bay3))
+                     (at c2 bay3) (not (at c2 bay1)) (not (at c2 bay2))
+                     (not (sealed c1)) (not (sealed c2))
+                )
+            )
+        )
+    )
+
+    (:goal
+        (and
+            (at c1 bay2)
+            ([C. All] (at c1 bay2))
+        )
+    )
+)

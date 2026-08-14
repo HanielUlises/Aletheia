@@ -1,0 +1,77 @@
+;; Doxastic Depot 5 -- pure announcement: turn private knowledge into CK.
+;;
+;; The robots share bay1 and know where c1 is; the chief is in the office and
+;; only knows that c1 is either in bay1 or in bay2.  The initial model therefore
+;; has two worlds already.  One truthful public announcement closes the gap.
+;;
+;; Expected plan (length 1):
+;;   (broadcast rob1 c1 bay2)
+
+(define (problem depot-5)
+    (:domain doxastic-depot)
+
+    (:requirements
+        :KD45-frames
+        :finitary-S5-theories
+        :common-knowledge
+        :knowing-whether
+        :modal-goals
+        :negative-goals
+        :negative-preconditions
+        :disjunctive-goals
+        :facts
+    )
+
+    (:agents chief rob1 rob2)
+
+    (:objects bay1 bay2 bay3 - bay
+              c1 c2 - crate
+    )
+
+    (:facts-init
+        (adjacent bay1 bay2) (adjacent bay2 bay1)
+        (adjacent bay2 bay3) (adjacent bay3 bay2)
+        (office bay3)
+    )
+
+    (:init
+        (:and
+            (at-ag chief bay3) (not (at-ag chief bay1)) (not (at-ag chief bay2))
+            (at-ag rob1 bay1) (not (at-ag rob1 bay2)) (not (at-ag rob1 bay3))
+            (at-ag rob2 bay1) (not (at-ag rob2 bay2)) (not (at-ag rob2 bay3))
+            ;; c1 really is in bay2
+            (at c1 bay2) (not (at c1 bay1)) (not (at c1 bay3))
+            (at c2 bay3) (not (at c2 bay1)) (not (at c2 bay2))
+            (not (sealed c1)) (not (sealed c2))
+            ;; Positions of the agents are common knowledge
+            ([C. All]
+                (and (at-ag chief bay3) (not (at-ag chief bay1)) (not (at-ag chief bay2))
+                     (at-ag rob1 bay1) (not (at-ag rob1 bay2)) (not (at-ag rob1 bay3))
+                     (at-ag rob2 bay1) (not (at-ag rob2 bay2)) (not (at-ag rob2 bay3))
+                )
+            )
+            ;; c2 and the seals are common knowledge too
+            ([C. All]
+                (and (at c2 bay3) (not (at c2 bay1)) (not (at c2 bay2))
+                     (not (at c1 bay3)) (not (sealed c1)) (not (sealed c2))
+                )
+            )
+            ;; It is common knowledge that c1 is in exactly one of bay1, bay2 ...
+            ([C. All]
+                (or (and (at c1 bay1) (not (at c1 bay2)))
+                    (and (at c1 bay2) (not (at c1 bay1)))
+                )
+            )
+            ;; ... and that the two robots know which one, while the chief does not
+            ([C. All] ([Kw. rob1] (at c1 bay2)))
+            ([C. All] ([Kw. rob2] (at c1 bay2)))
+        )
+    )
+
+    (:goal
+        (and
+            (at c1 bay2)
+            ([C. All] (at c1 bay2))
+        )
+    )
+)

@@ -60,6 +60,10 @@ BENCHMARKS=(
     "whisper     whisper-problem.json"
     "muddy1      muddy-children-problem.json"
     "muddy3      muddy-children-problem-3.json"
+    "depot1      problem_1.json"
+    "depot2      problem_2.json"
+    "depot3      problem_3.json"
+    "depot5      problem_5.json"
 )
 
 for heuristic in "${HEURISTICS[@]}"; do
