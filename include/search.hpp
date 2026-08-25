@@ -91,7 +91,7 @@ search(const PlanningTask& task, const Heuristic& h,
 
 } // namespace gbfs
 
-// ── Conditional plans (AND-OR search) ───────────────────────────────────────
+// Conditional plans (AND-OR search).
 
 // A node in a conditional plan.
 //

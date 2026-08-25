@@ -70,7 +70,7 @@ struct EpistemicState {
 
     void allocate(std::uint32_t worlds, std::uint32_t atoms, std::uint32_t agents);
 
-    // ── Element access ────────────────────────────────────────────────────
+    // Element access.
     [[nodiscard]] bits::WordSpan val(WorldIdx w) noexcept
         { return {valuation.data() + std::size_t(w) * val_words, val_words}; }
     [[nodiscard]] bits::ConstWordSpan val(WorldIdx w) const noexcept
@@ -100,7 +100,7 @@ struct EpistemicState {
     void add_edge(AgentIdx ag, WorldIdx from, WorldIdx to)
                                           { bits::set(succ(ag, from), to);   invalidate(); }
 
-    // ── Model checking ────────────────────────────────────────────────────
+    // Model checking.
     //
     // sat(φ) is the extension of φ: the set of worlds at which φ holds,
     // computed bottom-up over the whole model and memoised by formula id.
@@ -119,7 +119,7 @@ struct EpistemicState {
 
     void invalidate() const noexcept;
 
-    // ── Identity ──────────────────────────────────────────────────────────
+    // Identity.
     //
     // These compare the *labelled* structure. They are exact up to isomorphism
     // only for states produced by bisim_contract, which assigns a canonical

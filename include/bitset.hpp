@@ -151,13 +151,14 @@ constexpr bool for_each_until(ConstWordSpan s, F&& f) {
     return true;
 }
 
-// ── Mixing ────────────────────────────────────────────────────────────────
+// Mixing.
 //
-// splitmix64. The previous code combined raw uint32 values with a boost-style
-// hash_combine, but libstdc++ implements std::hash<uint32_t> as the identity,
-// so the input to the combiner had no avalanche at all. Bisimulation class
-// assignment and the closed list both depend on collision behaviour, so the
-// mixer is now a real finalizer.
+// splitmix64, used as a finalizer rather than as a combiner over raw values.
+// libstdc++ implements std::hash<uint32_t> as the identity, so combining hashed
+// uint32 values boost-style would feed the combiner input with no avalanche.
+// Bisimulation class assignment and the closed list both depend on collision
+// behaviour, which makes full mixing a correctness-relevant property here and
+// not merely a quality-of-implementation one.
 
 [[nodiscard]] constexpr Word mix64(Word x) noexcept {
     x += 0x9E3779B97F4A7C15ULL;

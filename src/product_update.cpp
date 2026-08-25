@@ -22,23 +22,14 @@
 // fully observing, R^E_i(e) = E, which over-approximates uncertainty and is
 // therefore safe.
 //
-//
-// Three costs dominated the previous implementation, all of them removed here.
-//
-// 1. Preconditions, postcondition guards and observability conditions were
-//    evaluated pointwise with holds_at(φ, w), once per (world, event) or per
-//    (world, event, agent) triple. They are now evaluated once each as
-//    extensions over the whole source model, and every later test is a bit
-//    lookup. Observability conditions in particular depend only on w, never on
-//    e, so the old placement inside the pair loop repeated each evaluation |E|
-//    times over.
-//
-// 2. The (w,e) → world table was a hash map probed from the innermost loop of
-//    the relation construction. It is now a flat array.
-//
-// 3. Iteration ran over the hash map, visiting source worlds in essentially
-//    random order. It now runs in index order, so the source model's
-//    accessibility rows are walked sequentially.
+// Evaluation strategy. Preconditions, postcondition guards and observability
+// conditions are computed once each as extensions over the whole source model,
+// so that every per-pair test performed during the construction is a bit
+// lookup. An observability condition is a function of w alone and independent
+// of e, which is what permits hoisting its evaluation out of the pair loop. The
+// (w,e) → world table is a flat array indexed by w·|E| + e rather than an
+// associative container, and the construction iterates in ascending world index
+// so that the source model's accessibility rows are traversed sequentially.
 
 namespace {
 
@@ -106,7 +97,7 @@ EventPrecomputation precompute(const EpistemicState& s, const Action& a) {
     return p;
 }
 
-// KD45 seriality 
+// KD45 seriality repair.
 //
 // KD45 requires every R_i to be serial: ∀w ∃v. w R_i v. The product does not
 // preserve seriality — (w,e) is non-serial for agent i whenever R_i(w) = ∅ or
@@ -151,7 +142,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
     const EventPrecomputation p = precompute(s, a);
 
-    // W'
+    // W'.
     ProductUpdateResult out;
     out.num_events = ne;
     out.pair_to_idx.assign(std::size_t(nw) * ne, kNoWorld);
@@ -188,7 +179,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
             if (bits::test(ext, w)) bits::reset(dst, atom);
     }
 
-    // W'* 
+    // W'*.
     {
         auto des = result.designated_bits();
         bits::for_each(s.designated_bits(), [&](std::uint32_t w) {
@@ -202,7 +193,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
             return pruned<ProductUpdateResult>(PruneReason::Inapplicable);
     }
 
-    // R'_i
+    // R'_i.
     //
     //   R'_i((w,e)) = { (v,f) | v ∈ R_i(w), f ∈ R^E_i(e) }
     //
@@ -252,7 +243,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
     result.invalidate();
 
-    // KD45 repair 
+    // KD45 repair.
     if (enforce_kd45) {
         const auto alive = serial_core(result);
 
@@ -284,7 +275,7 @@ product_update(const EpistemicState& s, const Action& a,
     return ok(std::move(res->state));
 }
 
-// Sensing 
+// Sensing.
 //
 // For a sensing action with E_d = {e₁, …}, the branch for e_k is the epistemic
 // state given that e_k fired. All branches share the product model W' and R';

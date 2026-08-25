@@ -54,7 +54,7 @@ template <class T>
 template <class T>
 class Outcome {
 public:
-    Outcome(T v) : value_(std::move(v)) {} 
+    Outcome(T v) : value_(std::move(v)) {}
     explicit Outcome(PruneReason r) : reason_(r) {}
 
     [[nodiscard]] bool has_value() const noexcept { return value_.has_value(); }

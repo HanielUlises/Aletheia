@@ -2,10 +2,10 @@
 #include "state.hpp"
 
 // Applicability reduces to two set tests once preconditions are evaluated as
-// extensions over the whole model. The previous implementation looped over
-// designated worlds calling holds_at per world, re-descending the precondition
-// each time; here sat(pre(e)) is computed once and memoised on the state, so
-// the product update that follows reuses it.
+// extensions over the whole model. sat(pre(e)) is computed once and memoised on
+// the state, and the product update that follows reuses it; evaluating the
+// precondition per designated world would instead re-descend the formula once
+// for each world tested.
 
 // Strong, conformant applicability.
 //

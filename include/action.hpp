@@ -2,7 +2,7 @@
 #include "types.hpp"
 #include "formula.hpp"
 
-// One event inside an action's event model 
+// One event inside an action's event model
 struct Event {
     EventIdx id;
     std::string name;
