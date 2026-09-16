@@ -52,6 +52,9 @@ namespace {
 struct RowGroups {
     std::vector<std::uint32_t> group_of;   // world → group
     std::vector<WorldIdx>      rep;        // group → representative world
+    std::vector<bits::Word>    hash;       // world → row hash
+    std::vector<std::int32_t>  set_data;   // N_i per group, last round
+    std::vector<std::uint32_t> set_begin;
 };
 
 struct Scratch {
@@ -63,8 +66,6 @@ struct Scratch {
     std::vector<std::uint32_t> key_begin;
     std::vector<RowGroups>     groups;
     std::vector<std::int32_t>  keys;
-    std::vector<std::int32_t>  set_data;
-    std::vector<std::uint32_t> set_begin;
     std::vector<std::uint32_t> group_order;
     std::vector<std::int32_t>  rank_of_group;
     std::vector<std::uint32_t> stamp;
@@ -76,11 +77,8 @@ Scratch& scratch() {
     return sc;
 }
 
-// Worlds unreachable from W* cannot affect the truth of any formula evaluated
-// at a designated world, so they are dropped before refinement rather than
-// carried through it. The product update materialises the full W × E cross
-// product, which regularly leaves such worlds behind.
-// Word-parallel BFS; returns `s` without copying when all worlds are reachable.
+// Drops worlds unreachable from W*. Word-parallel BFS; returns `s` without
+// copying when every world is reachable.
 EpistemicState restrict_to_reachable(EpistemicState s) {
     const std::uint32_t nw = s.num_worlds;
     const std::uint32_t rw = s.rel_words;
@@ -126,9 +124,17 @@ void group_rows(const EpistemicState& m, AgentIdx ag,
     g.group_of.resize(nw);
     g.rep.clear();
 
+    // Sort by row hash; full rows are compared only on equal hashes.
+    g.hash.resize(nw);
+    for (WorldIdx w = 0; w < nw; ++w) {
+        bits::Word h = 0;
+        for (bits::Word word : m.succ(ag, w)) h = bits::mix64(h ^ word);
+        g.hash[w] = h;
+    }
     order.resize(nw);
     for (WorldIdx w = 0; w < nw; ++w) order[w] = w;
     std::sort(order.begin(), order.end(), [&](WorldIdx x, WorldIdx y) {
+        if (g.hash[x] != g.hash[y]) return g.hash[x] < g.hash[y];
         const auto rx = m.succ(ag, x), ry = m.succ(ag, y);
         return std::lexicographical_compare(rx.begin(), rx.end(), ry.begin(), ry.end());
     });
@@ -211,8 +217,6 @@ EpistemicState bisim_contract(EpistemicState s) {
     auto& keys = sc.keys;
     keys.resize(std::size_t(nw) * key_width);
 
-    auto& set_data      = sc.set_data;     // concatenated N_i per group
-    auto& set_begin     = sc.set_begin;
     auto& group_order   = sc.group_order;
     auto& rank_of_group = sc.rank_of_group;
     auto& stamp         = sc.stamp;
@@ -226,8 +230,10 @@ EpistemicState bisim_contract(EpistemicState s) {
             keys[std::size_t(w) * key_width] = class_of[w];
 
         for (AgentIdx ag = 0; ag < na; ++ag) {
-            const RowGroups& g  = groups[ag];
+            RowGroups&       g  = groups[ag];
             const auto       ng = static_cast<std::uint32_t>(g.rep.size());
+            auto& set_data  = g.set_data;
+            auto& set_begin = g.set_begin;
 
             set_data.clear();
             set_begin.assign(ng + 1, 0);
@@ -313,12 +319,14 @@ EpistemicState bisim_contract(EpistemicState s) {
     for (std::int32_t c = 0; c < num_classes; ++c)
         bits::copy_from(out.val(static_cast<WorldIdx>(c)), m.val(repr[c]));
 
+    // The last round's N_i were computed from the final classes.
     for (AgentIdx ag = 0; ag < na; ++ag) {
+        const RowGroups& g = groups[ag];
         for (std::int32_t c = 0; c < num_classes; ++c) {
             auto dst = out.succ(ag, static_cast<WorldIdx>(c));
-            bits::for_each(m.succ(ag, repr[c]), [&](std::uint32_t v) {
-                bits::set(dst, static_cast<WorldIdx>(class_of[v]));
-            });
+            const std::uint32_t gi = g.group_of[repr[c]];
+            for (std::uint32_t k = g.set_begin[gi]; k < g.set_begin[gi + 1]; ++k)
+                bits::set(dst, static_cast<WorldIdx>(g.set_data[k]));
         }
     }
 
