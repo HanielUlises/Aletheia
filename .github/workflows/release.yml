@@ -22,7 +22,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DALETHEIA_NATIVE=OFF
           cmake --build build -j"$(nproc)"
 
       - name: Smoke suite

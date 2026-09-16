@@ -468,6 +468,7 @@ PlanningTask load_task(const std::string& json_path) {
                     ObsCase oc;
                     oc.condition = unwrap_formula(cond_j, task.atom_index, task.agent_index);
                     oc.relation  = rit->second;
+                    oc.finalize(ne);
                     act.obs_cases[ag].push_back(std::move(oc));
                 }
             }

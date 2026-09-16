@@ -20,6 +20,10 @@
 #include <cstdint>
 #include <span>
 
+#if defined(__BMI2__)
+#include <immintrin.h>
+#endif
+
 namespace bits {
 
 using Word = std::uint64_t;
@@ -118,6 +122,51 @@ constexpr void andnot_into(WordSpan dst, ConstWordSpan src) noexcept {
 constexpr void complement_into(WordSpan dst, ConstWordSpan src, std::size_t n) noexcept {
     for (std::size_t i = 0; i < dst.size(); ++i) dst[i] = ~src[i];
     if (!dst.empty()) dst.back() &= tail_mask(n);
+}
+
+// PEXT: bits of src selected by mask, packed towards bit 0.
+#if defined(__BMI2__)
+[[nodiscard]] inline Word pext_word(Word src, Word mask) noexcept {
+    return _pext_u64(src, mask);
+}
+#else
+[[nodiscard]] constexpr Word pext_word(Word src, Word mask) noexcept {
+    Word out = 0;
+    for (Word bit = 1; mask; bit <<= 1) {
+        if (src & mask & (~mask + 1)) out |= bit;
+        mask &= mask - 1;
+    }
+    return out;
+}
+#endif
+
+// dst |= v << pos, for v of at most 64 bits.
+constexpr void or_bits_at(WordSpan dst, std::size_t pos, Word v) noexcept {
+    const std::size_t wi = pos / kWordBits;
+    const std::size_t sh = pos % kWordBits;
+    dst[wi] |= v << sh;
+    if (sh != 0 && wi + 1 < dst.size()) dst[wi + 1] |= v >> (kWordBits - sh);
+}
+
+// Packs src ∩ mask into out by rank within mask; returns |mask|.
+inline std::size_t extract(ConstWordSpan src, ConstWordSpan mask, WordSpan out) noexcept {
+    for (Word& w : out) w = 0;
+    std::size_t pos = 0;
+    for (std::size_t i = 0; i < mask.size(); ++i) {
+        if (!mask[i]) continue;
+        const Word bits = pext_word(src[i], mask[i]);
+        if (bits) or_bits_at(out, pos, bits);
+        pos += static_cast<std::size_t>(std::popcount(mask[i]));
+    }
+    return pos;
+}
+
+// dst |= src << offset, for a src holding `nbits` meaningful bits.
+constexpr void or_shifted(WordSpan dst, std::size_t offset,
+                          ConstWordSpan src, std::size_t nbits) noexcept {
+    const std::size_t nw = words_for(nbits);
+    for (std::size_t i = 0; i < nw; ++i)
+        if (src[i]) or_bits_at(dst, offset + i * kWordBits, src[i]);
 }
 
 // Visits set bits in ascending index order. Order matters: several heuristics

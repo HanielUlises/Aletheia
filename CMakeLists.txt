@@ -29,6 +29,12 @@ set(SOURCES
 
 add_executable(epistemic_planner ${SOURCES})
 
+# Enables BMI2 PEXT where available. Turn off for binaries run on another CPU.
+option(ALETHEIA_NATIVE "Compile with -march=native" ON)
+if(ALETHEIA_NATIVE)
+  target_compile_options(epistemic_planner PRIVATE -march=native)
+endif()
+
 target_include_directories(epistemic_planner PRIVATE include)
 target_link_libraries(epistemic_planner PRIVATE nlohmann_json::nlohmann_json)
 

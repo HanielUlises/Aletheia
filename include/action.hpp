@@ -1,4 +1,5 @@
 #pragma once
+#include "bitset.hpp"
 #include "types.hpp"
 #include "formula.hpp"
 
@@ -23,6 +24,24 @@ struct Event {
 struct ObsCase {
     FormulaPtr condition;
     std::vector<std::unordered_set<EventIdx>> relation; // [event_id] -> reachable event ids
+
+    // relation as bit rows: bit f of row e set iff f ∈ relation[e].
+    std::vector<bits::Word> relation_bits;
+    std::uint32_t           relation_words{0};
+
+    void finalize(std::size_t num_events) {
+        relation_words = static_cast<std::uint32_t>(bits::words_for(num_events));
+        relation_bits.assign(num_events * relation_words, 0);
+        for (std::size_t e = 0; e < relation.size() && e < num_events; ++e)
+            for (EventIdx f : relation[e])
+                if (f < num_events)
+                    bits::set(event_row(static_cast<EventIdx>(e)), f);
+    }
+
+    [[nodiscard]] bits::WordSpan event_row(EventIdx e) noexcept
+        { return {relation_bits.data() + std::size_t(e) * relation_words, relation_words}; }
+    [[nodiscard]] bits::ConstWordSpan event_row(EventIdx e) const noexcept
+        { return {relation_bits.data() + std::size_t(e) * relation_words, relation_words}; }
 };
 
 // Abstract epistemic action = event model + observability

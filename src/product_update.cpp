@@ -1,6 +1,8 @@
 #include "product_update.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cassert>
 #include <vector>
 
 // DEL product update  M ⊗ A
@@ -26,75 +28,110 @@
 // conditions are computed once each as extensions over the whole source model,
 // so that every per-pair test performed during the construction is a bit
 // lookup. An observability condition is a function of w alone and independent
-// of e, which is what permits hoisting its evaluation out of the pair loop. The
-// (w,e) → world table is a flat array indexed by w·|E| + e rather than an
-// associative container, and the construction iterates in ascending world index
-// so that the source model's accessibility rows are traversed sequentially.
+// of e, which is what permits hoisting its evaluation out of the pair loop.
+//
+// Worlds are numbered in one block per event, idx(w,e) = off(e) + rank of w in
+// sat(pre(e)), so a row of R'_i is an OR of PEXT(R_i(w), sat(pre(f))) shifted to
+// off(f). bisim_contract renumbers canonically afterwards.
 
 namespace {
 
-// Precomputed, model-wide extensions of everything the update needs to test.
-struct EventPrecomputation {
-    std::vector<std::vector<bits::Word>> pre;          // [event]      → sat(pre(e))
-    std::vector<std::vector<std::pair<AtomIdx, std::vector<bits::Word>>>> post_true;
-    std::vector<std::vector<std::pair<AtomIdx, std::vector<bits::Word>>>> post_false;
+// Extensions the update tests, in flat thread-local buffers.
+struct Scratch {
+    std::uint32_t rel_words{0};
 
-    // obs_case[agent][world] = index of the first matching observability case,
-    // or -1 for the fully-observant fallback.
-    std::vector<std::int32_t> obs_case;
+    std::vector<bits::Word>    pre;          // [e · rel_words]  sat(pre(e))
+    std::vector<std::uint32_t> pre_count;    // [e]              |sat(pre(e))|
+    std::vector<std::uint32_t> offset;       // [e]              off(e)
+
+    struct Post { EventIdx event; AtomIdx atom; bool value; std::uint32_t ext; };
+    std::vector<Post>          posts;        // grouped by event, true before false
+    std::vector<std::uint32_t> post_begin;   // [e + 1] → range into posts
+    std::vector<bits::Word>    post_ext;     // [k · rel_words]
+
+    std::vector<bits::Word>    obs_ext;      // [c · rel_words]  one per case
+    std::vector<bits::Word>    obs_claimed;  // worlds matched by an earlier case
+    std::vector<std::int32_t>  obs_case;     // [ag · |W|]  first matching case, or -1
+
+    std::vector<bits::Word>    packed;       // [f · rel_words]  PEXT(row, pre(f))
+    std::vector<std::uint32_t> packed_bits;  // [f]
+    std::vector<bits::Word>    all_events;   // row with every event set
+
+    [[nodiscard]] bits::ConstWordSpan pre_of(EventIdx e) const noexcept
+        { return {pre.data() + std::size_t(e) * rel_words, rel_words}; }
 };
 
-EventPrecomputation precompute(const EpistemicState& s, const Action& a) {
+Scratch& scratch() {
+    thread_local Scratch sc;
+    return sc;
+}
+
+void precompute(const EpistemicState& s, const Action& a, Scratch& p) {
     const std::uint32_t ne = static_cast<std::uint32_t>(a.events.size());
     const std::uint32_t nw = s.num_worlds;
     const std::uint32_t na = s.num_agents;
+    const std::uint32_t rw = s.rel_words;
+    p.rel_words = rw;
 
-    EventPrecomputation p;
-    p.pre.resize(ne);
-    p.post_true.resize(ne);
-    p.post_false.resize(ne);
-
-    for (std::uint32_t e = 0; e < ne; ++e) {
-        const Event& ev = a.events[e];
-        s.sat_copy(*ev.precondition, p.pre[e]);
-
-        p.post_true[e].reserve(ev.post_true.size());
-        for (const auto& [atom, cond] : ev.post_true) {
-            std::vector<bits::Word> ext;
-            s.sat_copy(*cond, ext);
-            p.post_true[e].emplace_back(atom, std::move(ext));
-        }
-        p.post_false[e].reserve(ev.post_false.size());
-        for (const auto& [atom, cond] : ev.post_false) {
-            std::vector<bits::Word> ext;
-            s.sat_copy(*cond, ext);
-            p.post_false[e].emplace_back(atom, std::move(ext));
-        }
+    // A sat() span is invalidated by the next sat() call: copy before the next.
+    p.pre.resize(std::size_t(ne) * rw);
+    p.pre_count.resize(ne);
+    p.offset.resize(ne);
+    std::uint32_t total = 0;
+    for (EventIdx e = 0; e < ne; ++e) {
+        const auto ext = s.sat(*a.events[e].precondition);
+        std::copy(ext.begin(), ext.end(), p.pre.begin() + std::size_t(e) * rw);
+        p.pre_count[e] = static_cast<std::uint32_t>(bits::count(ext));
+        p.offset[e]    = total;
+        total         += p.pre_count[e];
     }
 
-    // One extension per observability condition, then a single pass to pick the
-    // first match per world. Conditions repeat heavily across agents and
-    // actions, and formula interning makes every repeat a memo hit.
+    p.posts.clear();
+    p.post_begin.assign(ne + 1, 0);
+    p.post_ext.clear();
+    for (EventIdx e = 0; e < ne; ++e) {
+        p.post_begin[e] = static_cast<std::uint32_t>(p.posts.size());
+        const Event& ev = a.events[e];
+        for (const auto& [atom, cond] : ev.post_true) {
+            const auto ext = s.sat(*cond);
+            p.posts.push_back({e, atom, true, static_cast<std::uint32_t>(p.post_ext.size())});
+            p.post_ext.insert(p.post_ext.end(), ext.begin(), ext.end());
+        }
+        for (const auto& [atom, cond] : ev.post_false) {
+            const auto ext = s.sat(*cond);
+            p.posts.push_back({e, atom, false, static_cast<std::uint32_t>(p.post_ext.size())});
+            p.post_ext.insert(p.post_ext.end(), ext.begin(), ext.end());
+        }
+    }
+    p.post_begin[ne] = static_cast<std::uint32_t>(p.posts.size());
+
+    // First matching observability case per world.
     p.obs_case.assign(std::size_t(na) * nw, -1);
     for (AgentIdx ag = 0; ag < na && ag < a.obs_cases.size(); ++ag) {
         const auto& cases = a.obs_cases[ag];
         if (cases.empty()) continue;
 
-        std::vector<std::vector<bits::Word>> ext(cases.size());
-        for (std::size_t c = 0; c < cases.size(); ++c)
-            s.sat_copy(*cases[c].condition, ext[c]);
+        p.obs_ext.resize(cases.size() * rw);
+        for (std::size_t c = 0; c < cases.size(); ++c) {
+            const auto ext = s.sat(*cases[c].condition);
+            std::copy(ext.begin(), ext.end(), p.obs_ext.begin() + c * rw);
+        }
 
-        for (WorldIdx w = 0; w < nw; ++w) {
-            for (std::size_t c = 0; c < cases.size(); ++c) {
-                if (bits::test(ext[c], w)) {
+        auto& claimed = p.obs_claimed;
+        claimed.assign(rw, 0);
+        for (std::size_t c = 0; c < cases.size(); ++c) {
+            for (std::uint32_t i = 0; i < rw; ++i) {
+                bits::Word fresh = p.obs_ext[c * rw + i] & ~claimed[i];
+                claimed[i] |= fresh;
+                while (fresh) {
+                    const WorldIdx w = static_cast<WorldIdx>(i * bits::kWordBits +
+                                                             std::countr_zero(fresh));
                     p.obs_case[std::size_t(ag) * nw + w] = static_cast<std::int32_t>(c);
-                    break;
+                    fresh &= fresh - 1;
                 }
             }
         }
     }
-
-    return p;
 }
 
 // KD45 seriality repair.
@@ -135,48 +172,52 @@ product_update_with_map(const EpistemicState& s, const Action& a,
     const std::uint32_t nw = s.num_worlds;
     const std::uint32_t na = s.num_agents;
     const std::uint32_t ne = static_cast<std::uint32_t>(a.events.size());
+    const std::uint32_t rw = s.rel_words;
 
     // Pessimistic bound on |W'|, checked before any allocation.
     if (!cap.allows(nw, ne))
         return pruned<ProductUpdateResult>(PruneReason::WorldCapExceeded);
 
-    const EventPrecomputation p = precompute(s, a);
+    Scratch& p = scratch();
+    precompute(s, a, p);
 
-    // W'.
+    const std::uint32_t nw_out = ne == 0 ? 0 : p.offset[ne - 1] + p.pre_count[ne - 1];
+    if (nw_out == 0)
+        return pruned<ProductUpdateResult>(PruneReason::Inapplicable);
+
+    // W' and the (w,e) → idx table, block by block.
     ProductUpdateResult out;
     out.num_events = ne;
     out.pair_to_idx.assign(std::size_t(nw) * ne, kNoWorld);
 
-    std::vector<std::uint64_t> surviving;    // packed (w,e), in construction order
-    surviving.reserve(std::size_t(nw) * ne / 2 + 1);
-
-    for (WorldIdx w = 0; w < nw; ++w) {
-        for (EventIdx e = 0; e < ne; ++e) {
-            if (!bits::test(p.pre[e], w)) continue;
-            out.pair_to_idx[std::size_t(w) * ne + e] =
-                static_cast<WorldIdx>(surviving.size());
-            surviving.push_back((std::uint64_t(w) << 32) | e);
-        }
-    }
-
-    if (surviving.empty())
-        return pruned<ProductUpdateResult>(PruneReason::Inapplicable);
-
     EpistemicState result;
-    result.allocate(static_cast<std::uint32_t>(surviving.size()),
-                    s.num_atoms, na);
+    result.allocate(nw_out, s.num_atoms, na);
 
-    for (std::size_t i = 0; i < surviving.size(); ++i) {
-        const auto w = static_cast<WorldIdx>(surviving[i] >> 32);
-        const auto e = static_cast<EventIdx>(surviving[i] & 0xFFFFFFFFu);
+    for (EventIdx e = 0; e < ne; ++e) {
+        WorldIdx idx = p.offset[e];
+        bits::for_each(p.pre_of(e), [&](std::uint32_t w) {
+            out.pair_to_idx[std::size_t(w) * ne + e] = idx;
+            bits::copy_from(result.val(idx), s.val(w));
+            ++idx;
+        });
 
-        auto dst = result.val(static_cast<WorldIdx>(i));
-        bits::copy_from(dst, s.val(w));
-
-        for (const auto& [atom, ext] : p.post_true[e])
-            if (bits::test(ext, w)) bits::set(dst, atom);
-        for (const auto& [atom, ext] : p.post_false[e])
-            if (bits::test(ext, w)) bits::reset(dst, atom);
+        // Postconditions; sets precede resets, as before.
+        const auto pre = p.pre_of(e);
+        for (std::uint32_t k = p.post_begin[e]; k < p.post_begin[e + 1]; ++k) {
+            const auto& post = p.posts[k];
+            const bits::ConstWordSpan guard{p.post_ext.data() + post.ext, rw};
+            for (std::uint32_t i = 0; i < rw; ++i) {
+                bits::Word hit = guard[i] & pre[i];
+                while (hit) {
+                    const WorldIdx w = static_cast<WorldIdx>(i * bits::kWordBits +
+                                                             std::countr_zero(hit));
+                    const auto dst = result.val(out.pair_to_idx[std::size_t(w) * ne + e]);
+                    if (post.value) bits::set(dst, post.atom);
+                    else            bits::reset(dst, post.atom);
+                    hit &= hit - 1;
+                }
+            }
+        }
     }
 
     // W'*.
@@ -195,10 +236,16 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
     // R'_i.
     //
-    //   R'_i((w,e)) = { (v,f) | v ∈ R_i(w), f ∈ R^E_i(e) }
+    //   R'_i((w,e)) = ⋃_{f ∈ R^E_i(e)}  off(f) + PEXT(R_i(w), sat(pre(f)))
     //
-    // Walked in source-world order so that s.succ(ag, w) is read once per
-    // (agent, world) and stays in cache across that world's events.
+    // Packed rows depend on (i, w) only; an event row equal to the previous
+    // one reuses the previous product row.
+    const std::uint32_t ew = static_cast<std::uint32_t>(bits::words_for(ne));
+    p.packed.resize(std::size_t(ne) * rw);
+    p.packed_bits.resize(ne);
+    p.all_events.assign(ew, 0);
+    bits::fill_all(p.all_events, ne);
+
     for (AgentIdx ag = 0; ag < na; ++ag) {
         const auto* agent_cases =
             (ag < a.obs_cases.size()) ? &a.obs_cases[ag] : nullptr;
@@ -207,36 +254,40 @@ product_update_with_map(const EpistemicState& s, const Action& a,
             const auto world_row = s.succ(ag, w);
             if (bits::empty(world_row)) continue;
 
+            for (EventIdx f = 0; f < ne; ++f)
+                p.packed_bits[f] = static_cast<std::uint32_t>(bits::extract(
+                    world_row, p.pre_of(f),
+                    bits::WordSpan{p.packed.data() + std::size_t(f) * rw, rw}));
+
             const std::int32_t ci = p.obs_case[std::size_t(ag) * nw + w];
-            const std::vector<std::unordered_set<EventIdx>>* event_rel =
-                (ci >= 0 && agent_cases) ? &(*agent_cases)[ci].relation : nullptr;
+            const ObsCase* oc = (ci >= 0 && agent_cases) ? &(*agent_cases)[ci] : nullptr;
+
+            bits::ConstWordSpan prev_events{};
+            WorldIdx            prev_row = kNoWorld;
 
             for (EventIdx e = 0; e < ne; ++e) {
                 const WorldIdx new_w = out.pair_to_idx[std::size_t(w) * ne + e];
                 if (new_w == kNoWorld) continue;
 
-                auto dst = result.succ(ag, new_w);
+                // No matching case: fully observant, R^E_i(e) = E.
+                assert(!oc || oc->relation_words == ew);   // ObsCase::finalize ran
+                const bits::ConstWordSpan events =
+                    oc ? oc->event_row(e) : bits::ConstWordSpan{p.all_events};
 
-                if (event_rel) {
-                    const auto& event_row = (*event_rel)[e];
-                    bits::for_each(world_row, [&](std::uint32_t v) {
-                        for (EventIdx f : event_row) {
-                            if (f >= ne) continue;
-                            const WorldIdx t = out.pair_to_idx[std::size_t(v) * ne + f];
-                            if (t != kNoWorld) bits::set(dst, t);
-                        }
-                    });
-                } else {
-                    // Fully-observant fallback: cross with every event. Pairs
-                    // that failed their precondition are absent from the table,
-                    // so they drop out here without a separate check.
-                    bits::for_each(world_row, [&](std::uint32_t v) {
-                        for (EventIdx f = 0; f < ne; ++f) {
-                            const WorldIdx t = out.pair_to_idx[std::size_t(v) * ne + f];
-                            if (t != kNoWorld) bits::set(dst, t);
-                        }
-                    });
+                auto dst = result.succ(ag, new_w);
+                if (prev_row != kNoWorld && bits::equal(events, prev_events)) {
+                    bits::copy_from(dst, result.succ(ag, prev_row));
+                    continue;
                 }
+
+                bits::for_each(events, [&](std::uint32_t f) {
+                    if (p.packed_bits[f] == 0) return;
+                    bits::or_shifted(dst, p.offset[f],
+                                     bits::ConstWordSpan{p.packed.data() + std::size_t(f) * rw, rw},
+                                     p.packed_bits[f]);
+                });
+                prev_events = events;
+                prev_row    = new_w;
             }
         }
     }
