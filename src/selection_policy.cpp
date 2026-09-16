@@ -19,6 +19,8 @@ int modal_depth(const Formula& f) {
         case FormulaKind::Common:
         case FormulaKind::Kw:
             return f.children.empty() ? 1 : 1 + modal_depth(*f.children[0]);
+        case FormulaKind::Not:
+            return f.children.empty() ? 0 : modal_depth(*f.children[0]);
         case FormulaKind::And:
         case FormulaKind::Or: {
             int d = 0;
