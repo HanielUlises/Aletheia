@@ -1,0 +1,71 @@
+(define (domain spy-ring)
+    (:requirements
+        :typing :equality :ontic-actions :conditional-effects :partial-observability
+        :facts :lists :list-comprehensions :knowing-whether
+        :general-preconditions :negative-postconditions :negative-list-formulas
+        :quantified-obs-conditions :negative-obs-conditions
+    )
+
+    (:action-type-libraries intermediate)
+
+    (:types room key)
+
+    (:predicates
+        (at ?i - agent ?r - room)
+        (secret ?k - key)
+        (:fact adjacent ?r1 ?r2 - room)
+        (:fact codebook ?i - agent ?k - key)
+        (:fact mole ?i - agent)
+    )
+
+    (:event nil)
+
+    ;-------------------- MOVE --------------------
+
+    (:event e-move
+        :parameters (?i - agent ?from ?to - room)
+        :precondition (at ?i ?from)
+        :effects (:and (not (at ?i ?from)) (at ?i ?to))
+    )
+
+    (:action move
+        :parameters (?i - agent ?from ?to - room | (adjacent ?from ?to))
+        :action-type (public-ontic (e-move ?i ?from ?to))
+        :observability-conditions (default Fully)
+    )
+
+    ;-------------------- TELL --------------------
+
+    (:event e-tell-pos
+        :parameters (?i ?j - agent ?k - key)
+        :precondition (and
+            (secret ?k)
+            ([?i] (secret ?k))
+            (exists (?r - room) (and (at ?i ?r) (at ?j ?r))))
+    )
+
+    (:event e-tell-neg
+        :parameters (?i ?j - agent ?k - key)
+        :precondition (and
+            (not (secret ?k))
+            ([?i] (not (secret ?k)))
+            (exists (?r - room) (and (at ?i ?r) (at ?j ?r))))
+    )
+
+    (:action tell
+        :parameters (?i ?j - agent ?k - key | (and (/= ?i ?j) (not (mole ?i))))
+        :action-type (quasi-private-announcement (e-tell-pos ?i ?j ?k) (e-tell-neg ?i ?j ?k) (nil))
+        :observability-conditions
+            (:and
+                (?i Fully)
+                (?j Fully)
+                (:forall (?l - agent | (and (/= ?l ?i) (/= ?l ?j)))
+                    (?l
+                        (if (exists (?r - room) (and (at ?i ?r) (at ?l ?r)))
+                            Fully
+                        else-if (exists (?r ?s - room) (and (at ?i ?r) (at ?l ?s) (adjacent ?r ?s)))
+                            Partially
+                        else
+                            Oblivious ))))
+    )
+)

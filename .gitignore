@@ -1,3 +1,8 @@
 /[Bb]uild/
 /bin/
 /out/
+# spy-ring: large grounded instances are rebuilt by ground.sh
+/benchmarks/spy-ring/*/*.json
+!/benchmarks/spy-ring/*/spy-*-a3-*.json
+!/benchmarks/spy-ring/*/spy-*-a4-*.json
+!/benchmarks/spy-ring/*/spy-*-a5-k2-*.json

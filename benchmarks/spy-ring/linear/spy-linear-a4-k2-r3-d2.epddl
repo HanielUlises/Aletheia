@@ -1,0 +1,44 @@
+(define (problem spy-linear-a4-k2-r3-d2)
+    (:domain spy-ring)
+    (:requirements :typing :equality :facts :finitary-S5-theories :modal-goals :negative-goals)
+
+    (:agents A B C M)
+    (:objects r1 r2 r3 - room k1 k2 - key)
+
+    (:facts-init
+        (adjacent r1 r2) (adjacent r2 r1) (adjacent r2 r3) (adjacent r3 r2) (codebook A k1) (codebook B k2) (mole M)
+    )
+
+    (:init
+        (:and
+            (at A r1)
+            (at B r2)
+            (at C r3)
+            (at M r2)
+            ([C. All] (and (at A r1) (at B r2) (at C r3) (at M r2) (not (at A r2)) (not (at A r3)) (not (at B r1)) (not (at B r3)) (not (at C r1)) (not (at C r2)) (not (at M r1)) (not (at M r3))))
+            (secret k1)
+            (secret k2)
+            ([C. All] ([Kw. A] (secret k1)))
+            ([C. All] ([Kw. B] (secret k2)))
+        )
+    )
+
+    (:goal
+        (and
+            ([Kw. A] (secret k1))
+            ([Kw. A] (secret k2))
+            ([Kw. B] (secret k1))
+            ([Kw. B] (secret k2))
+            ([Kw. C] (secret k1))
+            ([Kw. C] (secret k2))
+            (not ([Kw. M] (secret k1)))
+            (not ([Kw. M] (secret k2)))
+            ([A] (not ([Kw. M] (secret k1))))
+            ([A] (not ([Kw. M] (secret k2))))
+            ([B] (not ([Kw. M] (secret k1))))
+            ([B] (not ([Kw. M] (secret k2))))
+            ([C] (not ([Kw. M] (secret k1))))
+            ([C] (not ([Kw. M] (secret k2))))
+        )
+    )
+)

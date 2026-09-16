@@ -1,0 +1,32 @@
+(define (problem spy-linear-a3-k1-r2-d2)
+    (:domain spy-ring)
+    (:requirements :typing :equality :facts :finitary-S5-theories :modal-goals :negative-goals)
+
+    (:agents A B M)
+    (:objects r1 r2 - room k1 - key)
+
+    (:facts-init
+        (adjacent r1 r2) (adjacent r2 r1) (codebook A k1) (mole M)
+    )
+
+    (:init
+        (:and
+            (at A r1)
+            (at B r2)
+            (at M r2)
+            ([C. All] (and (at A r1) (at B r2) (at M r2) (not (at A r2)) (not (at B r1)) (not (at M r1))))
+            (secret k1)
+            ([C. All] ([Kw. A] (secret k1)))
+        )
+    )
+
+    (:goal
+        (and
+            ([Kw. A] (secret k1))
+            ([Kw. B] (secret k1))
+            (not ([Kw. M] (secret k1)))
+            ([A] (not ([Kw. M] (secret k1))))
+            ([B] (not ([Kw. M] (secret k1))))
+        )
+    )
+)

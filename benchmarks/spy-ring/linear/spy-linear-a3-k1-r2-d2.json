@@ -1,0 +1,1706 @@
+{
+  "planning-task-info": {
+    "problem": "spy-linear-a3-k1-r2-d2",
+    "domain": "spy-ring",
+    "libraries": [
+      "intermediate"
+    ],
+    "requirements": [
+      ":KD45-frames",
+      ":common-knowledge",
+      ":conditional-effects",
+      ":disjunctive-goals",
+      ":disjunctive-list-formulas",
+      ":disjunctive-obs-conditions",
+      ":disjunctive-postconditions",
+      ":disjunctive-preconditions",
+      ":equality",
+      ":events-conditions",
+      ":existential-obs-conditions",
+      ":existential-preconditions",
+      ":facts",
+      ":finitary-S5-theories",
+      ":general-preconditions",
+      ":group-modalities",
+      ":knowing-whether",
+      ":list-comprehensions",
+      ":lists",
+      ":modal-goals",
+      ":modal-preconditions",
+      ":multi-pointed-models",
+      ":negative-goals",
+      ":negative-list-formulas",
+      ":negative-obs-conditions",
+      ":negative-postconditions",
+      ":negative-preconditions",
+      ":ontic-actions",
+      ":partial-observability",
+      ":quantified-obs-conditions",
+      ":quantified-preconditions",
+      ":static-common-knowledge",
+      ":typing",
+      ":universal-obs-conditions",
+      ":universal-preconditions"
+    ],
+    "agents-number": 3,
+    "atoms-number": 17,
+    "facts-number": 4,
+    "actions-number": 10,
+    "initial-worlds-number": 2,
+    "goal-modal-depth": 2,
+    "goal-size": 16
+  },
+  "language": {
+    "atoms": [
+      "mole_A",
+      "mole_B",
+      "mole_M",
+      "codebook_A_k1",
+      "codebook_B_k1",
+      "codebook_M_k1",
+      "adjacent_r1_r1",
+      "adjacent_r1_r2",
+      "adjacent_r2_r1",
+      "adjacent_r2_r2",
+      "secret_k1",
+      "at_A_r1",
+      "at_A_r2",
+      "at_B_r1",
+      "at_B_r2",
+      "at_M_r1",
+      "at_M_r2"
+    ],
+    "agents": [
+      "A",
+      "B",
+      "M"
+    ]
+  },
+  "facts": [
+    "adjacent_r1_r2",
+    "adjacent_r2_r1",
+    "codebook_A_k1",
+    "mole_M"
+  ],
+  "initial-state": {
+    "worlds": [
+      "w0",
+      "w1"
+    ],
+    "relations": {
+      "A": {
+        "w0": [
+          "w0"
+        ],
+        "w1": [
+          "w1"
+        ]
+      },
+      "B": {
+        "w0": [
+          "w0",
+          "w1"
+        ],
+        "w1": [
+          "w0",
+          "w1"
+        ]
+      },
+      "M": {
+        "w0": [
+          "w0",
+          "w1"
+        ],
+        "w1": [
+          "w0",
+          "w1"
+        ]
+      }
+    },
+    "labels": {
+      "w0": [
+        "mole_M",
+        "codebook_A_k1",
+        "adjacent_r1_r2",
+        "adjacent_r2_r1",
+        "at_A_r1",
+        "at_B_r2",
+        "at_M_r2"
+      ],
+      "w1": [
+        "mole_M",
+        "codebook_A_k1",
+        "adjacent_r1_r2",
+        "adjacent_r2_r1",
+        "secret_k1",
+        "at_A_r1",
+        "at_B_r2",
+        "at_M_r2"
+      ]
+    },
+    "designated": [
+      "w1"
+    ]
+  },
+  "actions": {
+    "move_A_r1_r2": {
+      "action-type": "public-ontic",
+      "events": [
+        "e-move"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move": [
+            "e-move"
+          ]
+        }
+      },
+      "designated": [
+        "e-move"
+      ],
+      "preconditions": {
+        "e-move": {
+          "formula": "at_A_r1"
+        }
+      },
+      "effects": {
+        "e-move": {
+          "at_A_r2": {
+            "formula": "true"
+          },
+          "at_A_r1": {
+            "formula": "false"
+          }
+        }
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "move_A_r2_r1": {
+      "action-type": "public-ontic",
+      "events": [
+        "e-move"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move": [
+            "e-move"
+          ]
+        }
+      },
+      "designated": [
+        "e-move"
+      ],
+      "preconditions": {
+        "e-move": {
+          "formula": "at_A_r2"
+        }
+      },
+      "effects": {
+        "e-move": {
+          "at_A_r2": {
+            "formula": "false"
+          },
+          "at_A_r1": {
+            "formula": "true"
+          }
+        }
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "move_B_r1_r2": {
+      "action-type": "public-ontic",
+      "events": [
+        "e-move"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move": [
+            "e-move"
+          ]
+        }
+      },
+      "designated": [
+        "e-move"
+      ],
+      "preconditions": {
+        "e-move": {
+          "formula": "at_B_r1"
+        }
+      },
+      "effects": {
+        "e-move": {
+          "at_B_r2": {
+            "formula": "true"
+          },
+          "at_B_r1": {
+            "formula": "false"
+          }
+        }
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "move_B_r2_r1": {
+      "action-type": "public-ontic",
+      "events": [
+        "e-move"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move": [
+            "e-move"
+          ]
+        }
+      },
+      "designated": [
+        "e-move"
+      ],
+      "preconditions": {
+        "e-move": {
+          "formula": "at_B_r2"
+        }
+      },
+      "effects": {
+        "e-move": {
+          "at_B_r2": {
+            "formula": "false"
+          },
+          "at_B_r1": {
+            "formula": "true"
+          }
+        }
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "move_M_r1_r2": {
+      "action-type": "public-ontic",
+      "events": [
+        "e-move"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move": [
+            "e-move"
+          ]
+        }
+      },
+      "designated": [
+        "e-move"
+      ],
+      "preconditions": {
+        "e-move": {
+          "formula": "at_M_r1"
+        }
+      },
+      "effects": {
+        "e-move": {
+          "at_M_r2": {
+            "formula": "true"
+          },
+          "at_M_r1": {
+            "formula": "false"
+          }
+        }
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "move_M_r2_r1": {
+      "action-type": "public-ontic",
+      "events": [
+        "e-move"
+      ],
+      "relations": {
+        "Fully": {
+          "e-move": [
+            "e-move"
+          ]
+        }
+      },
+      "designated": [
+        "e-move"
+      ],
+      "preconditions": {
+        "e-move": {
+          "formula": "at_M_r2"
+        }
+      },
+      "effects": {
+        "e-move": {
+          "at_M_r2": {
+            "formula": "false"
+          },
+          "at_M_r1": {
+            "formula": "true"
+          }
+        }
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "tell_A_B_k1": {
+      "action-type": "quasi-private-announcement",
+      "events": [
+        "e-tell-pos",
+        "e-tell-neg",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-tell-pos": [
+            "e-tell-pos"
+          ],
+          "e-tell-neg": [
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Partially": {
+          "e-tell-pos": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "e-tell-neg": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-tell-pos": [
+            "nil"
+          ],
+          "e-tell-neg": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-tell-pos"
+      ],
+      "preconditions": {
+        "e-tell-pos": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              "secret_k1",
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "A"
+                ],
+                "formula": "secret_k1"
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r1",
+                      "at_B_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r2",
+                      "at_B_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "e-tell-neg": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              {
+                "connective": "not",
+                "formula": "secret_k1"
+              },
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "A"
+                ],
+                "formula": {
+                  "connective": "not",
+                  "formula": "secret_k1"
+                }
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r1",
+                      "at_B_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r2",
+                      "at_B_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-tell-pos": null,
+        "e-tell-neg": null,
+        "nil": null
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": {
+              "connective": "or",
+              "formulas": [
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_A_r1",
+                    "at_M_r1"
+                  ]
+                },
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_A_r2",
+                    "at_M_r2"
+                  ]
+                }
+              ]
+            }
+          },
+          "Partially": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_M_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_M_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "Oblivious": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_M_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_M_r2"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "connective": "or",
+                  "formulas": [
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r1",
+                        "at_M_r1",
+                        "adjacent_r1_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r1",
+                        "at_M_r2",
+                        "adjacent_r1_r2"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r2",
+                        "at_M_r1",
+                        "adjacent_r2_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r2",
+                        "at_M_r2",
+                        "adjacent_r2_r2"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_M_r1",
+                          "adjacent_r1_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_M_r2",
+                          "adjacent_r1_r2"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_M_r1",
+                          "adjacent_r2_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_M_r2",
+                          "adjacent_r2_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "tell_A_M_k1": {
+      "action-type": "quasi-private-announcement",
+      "events": [
+        "e-tell-pos",
+        "e-tell-neg",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-tell-pos": [
+            "e-tell-pos"
+          ],
+          "e-tell-neg": [
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Partially": {
+          "e-tell-pos": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "e-tell-neg": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-tell-pos": [
+            "nil"
+          ],
+          "e-tell-neg": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-tell-pos"
+      ],
+      "preconditions": {
+        "e-tell-pos": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              "secret_k1",
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "A"
+                ],
+                "formula": "secret_k1"
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r1",
+                      "at_M_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r2",
+                      "at_M_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "e-tell-neg": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              {
+                "connective": "not",
+                "formula": "secret_k1"
+              },
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "A"
+                ],
+                "formula": {
+                  "connective": "not",
+                  "formula": "secret_k1"
+                }
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r1",
+                      "at_M_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_A_r2",
+                      "at_M_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-tell-pos": null,
+        "e-tell-neg": null,
+        "nil": null
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": {
+              "connective": "or",
+              "formulas": [
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_A_r1",
+                    "at_B_r1"
+                  ]
+                },
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_A_r2",
+                    "at_B_r2"
+                  ]
+                }
+              ]
+            }
+          },
+          "Partially": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_B_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_B_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "Oblivious": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_B_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_B_r2"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "connective": "or",
+                  "formulas": [
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r1",
+                        "at_B_r1",
+                        "adjacent_r1_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r1",
+                        "at_B_r2",
+                        "adjacent_r1_r2"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r2",
+                        "at_B_r1",
+                        "adjacent_r2_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_A_r2",
+                        "at_B_r2",
+                        "adjacent_r2_r2"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_B_r1",
+                          "adjacent_r1_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r1",
+                          "at_B_r2",
+                          "adjacent_r1_r2"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_B_r1",
+                          "adjacent_r2_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_A_r2",
+                          "at_B_r2",
+                          "adjacent_r2_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    },
+    "tell_B_A_k1": {
+      "action-type": "quasi-private-announcement",
+      "events": [
+        "e-tell-pos",
+        "e-tell-neg",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-tell-pos": [
+            "e-tell-pos"
+          ],
+          "e-tell-neg": [
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Partially": {
+          "e-tell-pos": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "e-tell-neg": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-tell-pos": [
+            "nil"
+          ],
+          "e-tell-neg": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-tell-pos"
+      ],
+      "preconditions": {
+        "e-tell-pos": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              "secret_k1",
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "B"
+                ],
+                "formula": "secret_k1"
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r1",
+                      "at_A_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r2",
+                      "at_A_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "e-tell-neg": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              {
+                "connective": "not",
+                "formula": "secret_k1"
+              },
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "B"
+                ],
+                "formula": {
+                  "connective": "not",
+                  "formula": "secret_k1"
+                }
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r1",
+                      "at_A_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r2",
+                      "at_A_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-tell-pos": null,
+        "e-tell-neg": null,
+        "nil": null
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": {
+              "connective": "or",
+              "formulas": [
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_B_r1",
+                    "at_M_r1"
+                  ]
+                },
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_B_r2",
+                    "at_M_r2"
+                  ]
+                }
+              ]
+            }
+          },
+          "Partially": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_M_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_M_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "Oblivious": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_M_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_M_r2"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "connective": "or",
+                  "formulas": [
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r1",
+                        "at_M_r1",
+                        "adjacent_r1_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r1",
+                        "at_M_r2",
+                        "adjacent_r1_r2"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r2",
+                        "at_M_r1",
+                        "adjacent_r2_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r2",
+                        "at_M_r2",
+                        "adjacent_r2_r2"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_M_r1",
+                          "adjacent_r1_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_M_r2",
+                          "adjacent_r1_r2"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_M_r1",
+                          "adjacent_r2_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_M_r2",
+                          "adjacent_r2_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "tell_B_M_k1": {
+      "action-type": "quasi-private-announcement",
+      "events": [
+        "e-tell-pos",
+        "e-tell-neg",
+        "nil"
+      ],
+      "relations": {
+        "Fully": {
+          "e-tell-pos": [
+            "e-tell-pos"
+          ],
+          "e-tell-neg": [
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Partially": {
+          "e-tell-pos": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "e-tell-neg": [
+            "e-tell-pos",
+            "e-tell-neg"
+          ],
+          "nil": [
+            "nil"
+          ]
+        },
+        "Oblivious": {
+          "e-tell-pos": [
+            "nil"
+          ],
+          "e-tell-neg": [
+            "nil"
+          ],
+          "nil": [
+            "nil"
+          ]
+        }
+      },
+      "designated": [
+        "e-tell-pos"
+      ],
+      "preconditions": {
+        "e-tell-pos": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              "secret_k1",
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "B"
+                ],
+                "formula": "secret_k1"
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r1",
+                      "at_M_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r2",
+                      "at_M_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "e-tell-neg": {
+          "formula": {
+            "connective": "and",
+            "formulas": [
+              {
+                "connective": "not",
+                "formula": "secret_k1"
+              },
+              {
+                "modality-name": "box",
+                "modality-index": [
+                  "B"
+                ],
+                "formula": {
+                  "connective": "not",
+                  "formula": "secret_k1"
+                }
+              },
+              {
+                "connective": "or",
+                "formulas": [
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r1",
+                      "at_M_r1"
+                    ]
+                  },
+                  {
+                    "connective": "and",
+                    "formulas": [
+                      "at_B_r2",
+                      "at_M_r2"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "nil": {
+          "formula": "true"
+        }
+      },
+      "effects": {
+        "e-tell-pos": null,
+        "e-tell-neg": null,
+        "nil": null
+      },
+      "observability-conditions": {
+        "A": {
+          "Fully": {
+            "formula": {
+              "connective": "or",
+              "formulas": [
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_B_r1",
+                    "at_A_r1"
+                  ]
+                },
+                {
+                  "connective": "and",
+                  "formulas": [
+                    "at_B_r2",
+                    "at_A_r2"
+                  ]
+                }
+              ]
+            }
+          },
+          "Partially": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_A_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_A_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "Oblivious": {
+            "formula": {
+              "connective": "and",
+              "formulas": [
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_A_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_A_r2"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "connective": "or",
+                  "formulas": [
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r1",
+                        "at_A_r1",
+                        "adjacent_r1_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r1",
+                        "at_A_r2",
+                        "adjacent_r1_r2"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r2",
+                        "at_A_r1",
+                        "adjacent_r2_r1"
+                      ]
+                    },
+                    {
+                      "connective": "and",
+                      "formulas": [
+                        "at_B_r2",
+                        "at_A_r2",
+                        "adjacent_r2_r2"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "connective": "not",
+                  "formula": {
+                    "connective": "or",
+                    "formulas": [
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_A_r1",
+                          "adjacent_r1_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r1",
+                          "at_A_r2",
+                          "adjacent_r1_r2"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_A_r1",
+                          "adjacent_r2_r1"
+                        ]
+                      },
+                      {
+                        "connective": "and",
+                        "formulas": [
+                          "at_B_r2",
+                          "at_A_r2",
+                          "adjacent_r2_r2"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "B": {
+          "Fully": {
+            "formula": "true"
+          }
+        },
+        "M": {
+          "Fully": {
+            "formula": "true"
+          }
+        }
+      }
+    }
+  },
+  "goal": {
+    "formula": {
+      "connective": "and",
+      "formulas": [
+        {
+          "modality-name": "Kw.box",
+          "modality-index": [
+            "A"
+          ],
+          "formula": "secret_k1"
+        },
+        {
+          "modality-name": "Kw.box",
+          "modality-index": [
+            "B"
+          ],
+          "formula": "secret_k1"
+        },
+        {
+          "connective": "not",
+          "formula": {
+            "modality-name": "Kw.box",
+            "modality-index": [
+              "M"
+            ],
+            "formula": "secret_k1"
+          }
+        },
+        {
+          "modality-name": "box",
+          "modality-index": [
+            "A"
+          ],
+          "formula": {
+            "connective": "not",
+            "formula": {
+              "modality-name": "Kw.box",
+              "modality-index": [
+                "M"
+              ],
+              "formula": "secret_k1"
+            }
+          }
+        },
+        {
+          "modality-name": "box",
+          "modality-index": [
+            "B"
+          ],
+          "formula": {
+            "connective": "not",
+            "formula": {
+              "modality-name": "Kw.box",
+              "modality-index": [
+                "M"
+              ],
+              "formula": "secret_k1"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
