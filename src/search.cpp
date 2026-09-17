@@ -70,6 +70,7 @@ struct Successor {
     float          h{0.f};
     Fingerprint    fp;
     EpistemicState state;
+    CompactState   compact;        // what the queue stores
 };
 
 void build_successor(const EpistemicState& parent, const Action& action,
@@ -85,8 +86,11 @@ void build_successor(const EpistemicState& parent, const Action& action,
     out.state = bisim_contract(std::move(*maybe));
     out.fp    = out.state.fingerprint();
     out.goal  = out.state.satisfies(*task.goal);
-    if (!out.goal && !closed.contains(out.fp)) out.h = h(out.state, task);
-    out.state.drop_cache();
+    if (!out.goal && !closed.contains(out.fp)) {
+        out.h       = h(out.state, task);
+        out.compact = CompactState::from(out.state);
+    }
+    out.state = EpistemicState{};
 }
 
 // Enough work per expansion to cover waking the pool.
@@ -129,7 +133,7 @@ namespace gbfs {
 namespace {
 
 struct Node {
-    EpistemicState state;
+    CompactState   state;          // released once expanded
     std::uint32_t  parent{kNoNode};
     ActionIdx      action{0};
     std::uint32_t  g{0};
@@ -180,7 +184,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
 
     closed.insert(init.fingerprint());
     live_bytes += init.footprint();
-    nodes.push_back(Node{std::move(init), kNoNode, 0, 0});
+    nodes.push_back(Node{CompactState::from(init), kNoNode, 0, 0});
     open.push_back(QEntry{init_h, 0, 0});
 
     while (!open.empty()) {
@@ -209,7 +213,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         const std::uint32_t cur_idx = cur.idx;
         bool generated_successor = false;
 
-        const EpistemicState& parent = nodes[cur_idx].state;
+        const EpistemicState parent = nodes[cur_idx].state.expand();
         const StateSymmetry   stab   = symmetry_of(task, parent);
 
         std::vector<ActionIdx> cands;
@@ -236,14 +240,13 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             if (sc.pruned != PruneReason::None) { result.stats.record_prune(sc.pruned); continue; }
 
             const ActionIdx ai = cands[k];
-            EpistemicState& next = sc.state;
             generated_successor = true;
             result.stats.nodes_generated++;
 
             const std::uint32_t g = nodes[cur_idx].g + 1;
 
             if (sc.goal) {
-                nodes.push_back(Node{std::move(next), cur_idx, ai, g});
+                nodes.push_back(Node{CompactState{}, cur_idx, ai, g});
                 result.plan = reconstruct(nodes, static_cast<std::uint32_t>(nodes.size() - 1), task);
                 result.stats.final_h    = 0.f;
                 result.stats.closed_size = closed.size();
@@ -276,11 +279,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
                 result.stats.heuristic_stalls++;
             }
 
-            live_bytes += next.footprint();
+            live_bytes += sc.compact.footprint();
             result.stats.peak_state_bytes =
                 std::max(result.stats.peak_state_bytes, live_bytes);
 
-            nodes.push_back(Node{std::move(next), cur_idx, ai, g});
+            nodes.push_back(Node{std::move(sc.compact), cur_idx, ai, g});
             open.push_back(QEntry{hv, g, static_cast<std::uint32_t>(nodes.size() - 1)});
             std::push_heap(open.begin(), open.end(), Worse{});
 
@@ -290,7 +293,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
 
         // Expanded: only the parent link and action are needed from here on.
         live_bytes -= nodes[cur_idx].state.footprint();
-        nodes[cur_idx].state = EpistemicState{};
+        nodes[cur_idx].state = CompactState{};
 
         if (!generated_successor) result.stats.dead_ends++;
     }
