@@ -1,7 +1,9 @@
 #include "search.hpp"
 
 #include "bisimulation.hpp"
+#include "parallel.hpp"
 #include "product_update.hpp"
+#include "symmetry.hpp"
 #include "world_cap_policy.hpp"
 
 #include <algorithm>
@@ -35,11 +37,78 @@
 // hash sensitive to world numbering would not have that property, and would
 // re-expand states already closed.
 
+
+namespace {
+
+// Stabiliser of a canonical state under the task's agent swaps.
+StateSymmetry symmetry_of(const PlanningTask& task, const EpistemicState& s) {
+    return task.symmetry ? stabiliser(*task.symmetry, s) : StateSymmetry{};
+}
+
+// False for an action that is not its orbit's representative at this state.
+bool keep(const PlanningTask& task, const StateSymmetry& stab, ActionIdx ai,
+          PlannerStats& stats) {
+    if (stab.trivial || stab.keep(*task.symmetry, ai)) return true;
+    ++stats.pruned_symmetric;
+    return false;
+}
+
+} // namespace
+
 namespace {
 
 constexpr std::uint32_t kNoNode = std::numeric_limits<std::uint32_t>::max();
 
 using FingerprintSet = std::unordered_set<Fingerprint, FingerprintHash>;
+
+// One successor, built without touching shared search state except for
+// read-only lookups in `closed`.
+struct Successor {
+    bool           applicable{false};
+    PruneReason    pruned{PruneReason::None};
+    bool           goal{false};
+    float          h{0.f};
+    Fingerprint    fp;
+    EpistemicState state;
+};
+
+void build_successor(const EpistemicState& parent, const Action& action,
+                     const PlanningTask& task, const Heuristic& h,
+                     const WorldCapPolicy& cap, const FingerprintSet& closed,
+                     Successor& out) {
+    if (!action.applicable(parent)) return;
+    out.applicable = true;
+
+    auto maybe = product_update(parent, action, task.kd45, cap);
+    if (!maybe) { out.pruned = maybe.error(); return; }
+
+    out.state = bisim_contract(std::move(*maybe));
+    out.fp    = out.state.fingerprint();
+    out.goal  = out.state.satisfies(*task.goal);
+    if (!out.goal && !closed.contains(out.fp)) out.h = h(out.state, task);
+    out.state.drop_cache();
+}
+
+// Enough work per expansion to cover waking the pool.
+bool worth_parallel(const EpistemicState& s, std::size_t actions) {
+    return par::threads() > 1 && actions >= 4 &&
+           std::size_t(s.num_worlds) * actions >= 4096;
+}
+
+// Computes every extension successor generation reads, so that concurrent
+// sat() calls on `s` only look up.
+void warm_extensions(const EpistemicState& s, const PlanningTask& task) {
+    for (const Action& a : task.actions) {
+        for (const Event& e : a.events) {
+            (void)s.sat(*e.precondition);
+            for (const auto& [atom, cond] : e.post_true)  (void)s.sat(*cond);
+            for (const auto& [atom, cond] : e.post_false) (void)s.sat(*cond);
+        }
+        for (const auto& cases : a.obs_cases)
+            for (const ObsCase& c : cases) (void)s.sat(*c.condition);
+    }
+    (void)s.fingerprint();
+}
 
 // Reconstruct an action-name sequence by walking parent links to the root.
 template <class NodeArena>
@@ -140,20 +209,40 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         const std::uint32_t cur_idx = cur.idx;
         bool generated_successor = false;
 
-        for (ActionIdx ai = 0; ai < task.actions.size(); ++ai) {
-            const Action& action = task.actions[ai];
-            if (!action.applicable(nodes[cur_idx].state)) continue;
+        const EpistemicState& parent = nodes[cur_idx].state;
+        const StateSymmetry   stab   = symmetry_of(task, parent);
 
-            auto maybe = product_update(nodes[cur_idx].state, action, task.kd45, cap);
-            if (!maybe) { result.stats.record_prune(maybe.error()); continue; }
+        std::vector<ActionIdx> cands;
+        for (ActionIdx ai = 0; ai < task.actions.size(); ++ai)
+            if (keep(task, stab, ai, result.stats)) cands.push_back(ai);
 
-            EpistemicState next = bisim_contract(std::move(*maybe));
+        // Successors are built independently, in parallel when the models are
+        // large enough to pay for it, and merged in action order so results do
+        // not depend on the thread count.
+        std::vector<Successor> succ(cands.size());
+        const auto build = [&](std::size_t k) {
+            build_successor(parent, task.actions[cands[k]], task, h, cap, closed, succ[k]);
+        };
+        const bool parallel = worth_parallel(parent, cands.size());
+        if (parallel) {
+            warm_extensions(parent, task);
+            par::for_each_index(cands.size(), build);
+        }
+
+        for (std::size_t k = 0; k < cands.size(); ++k) {
+            if (!parallel) build(k);
+            Successor& sc = succ[k];
+            if (!sc.applicable) continue;
+            if (sc.pruned != PruneReason::None) { result.stats.record_prune(sc.pruned); continue; }
+
+            const ActionIdx ai = cands[k];
+            EpistemicState& next = sc.state;
             generated_successor = true;
             result.stats.nodes_generated++;
 
             const std::uint32_t g = nodes[cur_idx].g + 1;
 
-            if (next.satisfies(*task.goal)) {
+            if (sc.goal) {
                 nodes.push_back(Node{std::move(next), cur_idx, ai, g});
                 result.plan = reconstruct(nodes, static_cast<std::uint32_t>(nodes.size() - 1), task);
                 result.stats.final_h    = 0.f;
@@ -170,16 +259,15 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
                 return result;
             }
 
-            // Duplicate check before evaluating h: the heuristic is the most
-            // expensive operation per successor, and a fingerprint lookup is
-            // two integer comparisons.
-            if (!closed.insert(next.fingerprint()).second) {
+            // A sibling built in parallel may duplicate this one; h is skipped
+            // only for states already closed when the successor was built.
+            if (!closed.insert(sc.fp).second) {
                 result.stats.duplicates_pruned++;
                 continue;
             }
 
             result.stats.heuristic_calls++;
-            const float hv = h(next, task);
+            const float hv = sc.h;
             result.stats.final_h = hv;
             if (hv < result.stats.best_h) {
                 result.stats.best_h = hv;
@@ -199,6 +287,10 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             result.stats.max_frontier_size =
                 std::max(result.stats.max_frontier_size, open.size());
         }
+
+        // Expanded: only the parent link and action are needed from here on.
+        live_bytes -= nodes[cur_idx].state.footprint();
+        nodes[cur_idx].state = EpistemicState{};
 
         if (!generated_successor) result.stats.dead_ends++;
     }
@@ -289,8 +381,11 @@ std::vector<Expansion> expand(const EpistemicState& s, Context& ctx) {
     std::vector<Expansion> out;
     out.reserve(ctx.task.actions.size());
 
+    const StateSymmetry stab = symmetry_of(ctx.task, s);
+
     for (ActionIdx ai = 0; ai < ctx.task.actions.size(); ++ai) {
         const Action& a = ctx.task.actions[ai];
+        if (!keep(ctx.task, stab, ai, ctx.stats)) continue;
         if (!a.applicable(s)) continue;
 
         auto branches = product_update_split(s, a, ctx.task.kd45, ctx.cap);
@@ -544,8 +639,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         };
         std::vector<Succ> succs;
 
+        const StateSymmetry stab = symmetry_of(task, nodes[cur_idx].state);
+
         for (ActionIdx ai = 0; ai < task.actions.size(); ++ai) {
             const Action& action = task.actions[ai];
+            if (!keep(task, stab, ai, result.stats)) continue;
             if (!action.applicable(nodes[cur_idx].state)) continue;
 
             auto maybe = product_update(nodes[cur_idx].state, action, task.kd45, cap);
@@ -615,8 +713,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             result.stats.nodes_expanded++;
             if (budget_exhausted()) { result.stats.stop_timer(); return std::nullopt; }
 
+            const StateSymmetry stab = symmetry_of(task, nodes[node_idx].state);
+
             for (ActionIdx ai = 0; ai < task.actions.size(); ++ai) {
                 const Action& action = task.actions[ai];
+                if (!keep(task, stab, ai, result.stats)) continue;
                 if (!action.applicable(nodes[node_idx].state)) continue;
 
                 auto maybe = product_update(nodes[node_idx].state, action, task.kd45, cap);

@@ -265,6 +265,8 @@ void EpistemicState::invalidate() const noexcept {
     fp_.reset();
 }
 
+void EpistemicState::drop_cache() const noexcept { cache_.reset(); }
+
 bits::ConstWordSpan EpistemicState::sat(const Formula& f) const {
     if (!cache_) cache_ = std::make_unique<SatCache>(*this);
     return cache_->sat(f);

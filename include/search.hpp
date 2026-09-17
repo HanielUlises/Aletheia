@@ -28,6 +28,7 @@ struct PlannerStats {
     std::size_t pruned_world_cap{0};
     std::size_t pruned_non_serial{0};
     std::size_t pruned_inapplicable{0};
+    std::size_t pruned_symmetric{0};
 
     std::size_t heuristic_calls{0};
     std::size_t heuristic_improvements{0};
@@ -120,6 +121,12 @@ search(const PlanningTask& task, const Heuristic& h,
        std::size_t max_depth = 0, Deadline deadline = Deadline::max());
 
 } // namespace aostar
+
+// Conditional planning by replanning over the all-outcomes determinization.
+namespace replan {
+[[nodiscard]] std::optional<ConditionalSearchResult>
+search(const PlanningTask& task, const Heuristic& h, Deadline deadline = Deadline::max());
+} // namespace replan
 
 namespace ehc {
 

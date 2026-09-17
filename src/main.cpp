@@ -3,6 +3,8 @@
 #include "search.hpp"
 #include "heuristic.hpp"
 #include "selection_policy.hpp"
+#include "parallel.hpp"
+#include "symmetry.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -58,7 +60,7 @@ static void write_linear_plan(std::ostream& out,
     out << "]\n";
 }
 
-enum class Strategy { GBFS, EHC, AOSTAR };
+enum class Strategy { GBFS, EHC, AOSTAR, REPLAN };
 
 static bool has_sensing_actions(const PlanningTask& task) {
     for (auto& action : task.actions)
@@ -93,12 +95,14 @@ static std::optional<Strategy> parse_strategy(const std::string& label) {
     if (label == "gbfs")   return Strategy::GBFS;
     if (label == "ehc")    return Strategy::EHC;
     if (label == "aostar") return Strategy::AOSTAR;
+    if (label == "replan") return Strategy::REPLAN;
     return std::nullopt;
 }
 
 static const char* strategy_name(Strategy s) {
     switch (s) {
         case Strategy::AOSTAR: return "AO*";
+        case Strategy::REPLAN: return "replan";
         case Strategy::EHC:    return "EHC";
         default:               return "GBFS";
     }
@@ -114,7 +118,7 @@ static void usage(const char* prog) {
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
         << "  --heuristic    ug | ed | ks | wc | rpg | radd  (default: auto)\n"
-        << "  --strategy     gbfs | ehc | aostar             (default: auto)\n"
+        << "  --strategy     gbfs | ehc | aostar | replan    (default: auto)\n"
         << "  --policy       Selection-policy JSON; overrides the built-in\n"
         << "                 rules used to auto-select strategy and heuristic\n"
         << "  --print-policy Write the effective policy to stdout and exit\n"
@@ -124,6 +128,8 @@ static void usage(const char* prog) {
         << "  --ehc          Force EHC (alias for --strategy ehc)\n"
         << "  --gbfs         Force GBFS (alias for --strategy gbfs)\n"
         << "  --conditional  Force AO* (alias for --strategy aostar)\n"
+        << "  --no-symmetry  Disable agent-symmetry pruning\n"
+        << "  --threads      Worker threads (default: all cores; 1 = serial)\n"
         << "  --help         Show this message\n";
 }
 
@@ -140,6 +146,7 @@ int main(int argc, char* argv[]) {
 
     bool print_policy = false;
     bool explain      = false;
+    bool symmetry     = true;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -156,6 +163,8 @@ int main(int argc, char* argv[]) {
         else if (arg == "--conditional")  strategy_name_arg = "aostar";
         else if (arg == "--ehc")          strategy_name_arg = "ehc";
         else if (arg == "--gbfs")         strategy_name_arg = "gbfs";
+        else if (arg == "--no-symmetry")  symmetry          = false;
+        else if (arg == "--threads"   && i+1 < argc) par::set_threads(std::stoul(argv[++i]));
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
             std::cerr << "Unknown argument: " << arg << "\n";
@@ -195,6 +204,12 @@ int main(int argc, char* argv[]) {
     }
 
     const TaskFeatures features = TaskFeatures::extract(task);
+
+    if (symmetry) {
+        auto sym = std::make_shared<AgentSymmetry>(AgentSymmetry::detect(task));
+        std::cerr << "[symmetry] " << sym->swaps.size() << " agent swaps\n";
+        if (!sym->empty()) task.symmetry = std::move(sym);
+    }
 
     if (explain) {
         std::cerr << "[main] Features:";
@@ -262,8 +277,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (strategy == Strategy::AOSTAR) {
-        std::cerr << "[main] Mode: AO*\n";
+    if (strategy == Strategy::AOSTAR || strategy == Strategy::REPLAN) {
+        std::cerr << "[main] Mode: " << strategy_name(strategy) << "\n";
 
         auto deadline = timeout_secs > 0
             ? Clock::now() + std::chrono::seconds(timeout_secs)
@@ -271,7 +286,9 @@ int main(int argc, char* argv[]) {
 
         auto t_start = Clock::now();
 
-        auto result = aostar::search(task, *h, limit, deadline);
+        auto result = strategy == Strategy::AOSTAR
+            ? aostar::search(task, *h, limit, deadline)
+            : replan::search(task, *h, deadline);
 
         if (!result) {
             // AO* exhausted its budget. For partial-plan-linear domains

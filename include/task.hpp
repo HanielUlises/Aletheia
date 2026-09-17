@@ -3,6 +3,8 @@
 #include "state.hpp"
 #include "action.hpp"
 
+struct AgentSymmetry;
+
 struct PlanningTask {
     // Language
     std::vector<std::string> atom_names;
@@ -28,6 +30,9 @@ struct PlanningTask {
     // Kw-only goals have a specific gradient structure that KnowledgeSpreadHeuristic
     // is designed to exploit; EpistemicDistance wastes cycles on the wrong projection.
     bool goal_kw_only = false;
+
+    // Agent swaps that map the task onto itself; null when none or disabled.
+    std::shared_ptr<const AgentSymmetry> symmetry;
 
     std::unordered_map<std::string, AtomIdx>   atom_index;
     std::unordered_map<std::string, AgentIdx>  agent_index;

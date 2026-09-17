@@ -1,12 +1,12 @@
 #include "parser.hpp"
 #include "formula.hpp"
 #include "heuristic.hpp"
-#include <nlohmann/json.hpp>
-#include <fstream>
+#include "json.hpp"
+#include <charconv>
+#include <string_view>
 #include <stdexcept>
 #include <iostream>
 
-using json = nlohmann::json;
 
 /**
  * @brief Parse a logical formula from its JSON representation.
@@ -22,7 +22,7 @@ using json = nlohmann::json;
  * @throws std::runtime_error if the formula is malformed or references unknown symbols.
  */
 static FormulaPtr parse_formula(
-    const json& j,
+    const json::Value& j,
     const std::unordered_map<std::string,AtomIdx>&  atom_idx,
     const std::unordered_map<std::string,AgentIdx>& agent_idx)
 {
@@ -51,14 +51,14 @@ static FormulaPtr parse_formula(
 
         if (conn == "and") {
             std::vector<FormulaPtr> children;
-            for (auto& c : j.at("formulas"))
+            for (const auto c : j.at("formulas"))
                 children.push_back(parse_formula(c, atom_idx, agent_idx));
             return Formula::make_and(std::move(children));
         }
 
         if (conn == "or") {
             std::vector<FormulaPtr> children;
-            for (auto& c : j.at("formulas"))
+            for (const auto c : j.at("formulas"))
                 children.push_back(parse_formula(c, atom_idx, agent_idx));
             return Formula::make_or(std::move(children));
         }
@@ -76,7 +76,7 @@ static FormulaPtr parse_formula(
         if (conn == "forall") {
             if (j.contains("formulas")) {
                 std::vector<FormulaPtr> children;
-                for (auto& c : j.at("formulas"))
+                for (const auto c : j.at("formulas"))
                     children.push_back(parse_formula(c, atom_idx, agent_idx));
                 return Formula::make_and(std::move(children));
             }
@@ -88,7 +88,7 @@ static FormulaPtr parse_formula(
 
     if (j.contains("modality-name")) {
         std::string mname = j.at("modality-name").get<std::string>();
-        auto& midx = j.at("modality-index");
+        const auto midx = j.at("modality-index");
 
         FormulaPtr child =
             parse_formula(j.at("formula"), atom_idx, agent_idx);
@@ -104,7 +104,7 @@ static FormulaPtr parse_formula(
             }
 
             std::vector<AgentIdx> grp;
-            for (auto& a : midx) {
+            for (const auto a : midx) {
                 std::string aname = a.get<std::string>();
                 auto it = agent_idx.find(aname);
                 if (it == agent_idx.end())
@@ -140,7 +140,7 @@ static FormulaPtr parse_formula(
             }
             if (midx.size() > 1) {
                 std::vector<FormulaPtr> conjuncts;
-                for (auto& a : midx) {
+                for (const auto a : midx) {
                     std::string aname = a.get<std::string>();
                     auto it = agent_idx.find(aname);
                     if (it == agent_idx.end())
@@ -163,7 +163,7 @@ static FormulaPtr parse_formula(
             }
             if (midx.size() > 1) {
                 std::vector<FormulaPtr> disjuncts;
-                for (auto& a : midx) {
+                for (const auto a : midx) {
                     std::string aname = a.get<std::string>();
                     auto it = agent_idx.find(aname);
                     if (it == agent_idx.end())
@@ -178,7 +178,7 @@ static FormulaPtr parse_formula(
         // plank emits "C.box" with modality-index listing all group agents
         if (mname == "C.box") {
             std::vector<AgentIdx> grp;
-            for (auto& a : midx) {
+            for (const auto a : midx) {
                 std::string aname = a.get<std::string>();
                 auto it = agent_idx.find(aname);
                 if (it == agent_idx.end())
@@ -191,7 +191,7 @@ static FormulaPtr parse_formula(
         // C.diamond — dual: ¬C.box¬φ
         if (mname == "C.diamond") {
             std::vector<AgentIdx> grp;
-            for (auto& a : midx) {
+            for (const auto a : midx) {
                 std::string aname = a.get<std::string>();
                 auto it = agent_idx.find(aname);
                 if (it == agent_idx.end())
@@ -220,7 +220,7 @@ static FormulaPtr parse_formula(
  * @return Parsed formula as a FormulaPtr.
  */
 static FormulaPtr unwrap_formula(
-    const json& j,
+    const json::Value& j,
     const std::unordered_map<std::string,AtomIdx>&  atom_idx,
     const std::unordered_map<std::string,AgentIdx>& agent_idx)
 {
@@ -251,12 +251,8 @@ static FormulaPtr unwrap_formula(
  * @throws std::runtime_error if the file cannot be read or parsing fails.
  */
 PlanningTask load_task(const std::string& json_path) {
-    std::ifstream f(json_path);
-    if (!f.is_open())
-        throw std::runtime_error("Cannot open JSON file: " + json_path);
-
-    json j;
-    f >> j;
+    const json::Document doc = json::Document::parse_file(json_path);
+    const json::Value    j   = doc.root();
 
     PlanningTask task;
 
@@ -266,9 +262,9 @@ PlanningTask load_task(const std::string& json_path) {
     // If requirements are absent or neither flag is found, default to S5 (conservative).
     task.kd45 = false;
     if (j.contains("planning-task-info")) {
-        auto& pti = j.at("planning-task-info");
+        const auto pti = j.at("planning-task-info");
         if (pti.contains("requirements")) {
-            for (auto& req : pti.at("requirements")) {
+            for (const auto req : pti.at("requirements")) {
                 std::string r = req.get<std::string>();
                 if (r == ":kd45" || r == ":KD45-frames" || r == ":belief" || r == ":doxastic") {
                     task.kd45 = true;
@@ -280,7 +276,7 @@ PlanningTask load_task(const std::string& json_path) {
 
 
     if (!task.kd45 && j.contains("requirements")) {
-        for (auto& req : j.at("requirements")) {
+        for (const auto req : j.at("requirements")) {
             std::string r = req.get<std::string>();
             if (r == ":kd45" || r == ":KD45-frames" || r == ":belief" || r == ":doxastic") {
                 task.kd45 = true;
@@ -291,13 +287,13 @@ PlanningTask load_task(const std::string& json_path) {
 
     std::cerr << "[parser] Frame: " << (task.kd45 ? "KD45 (belief)" : "S5 (knowledge)") << "\n";
 
-    for (auto& a : j.at("language").at("atoms")) {
+    for (const auto a : j.at("language").at("atoms")) {
         std::string name = a.get<std::string>();
         task.atom_index[name] = static_cast<AtomIdx>(task.atom_names.size());
         task.atom_names.push_back(name);
     }
 
-    for (auto& a : j.at("language").at("agents")) {
+    for (const auto a : j.at("language").at("agents")) {
         std::string name = a.get<std::string>();
         task.agent_index[name] = static_cast<AgentIdx>(task.agent_names.size());
         task.agent_names.push_back(name);
@@ -305,15 +301,37 @@ PlanningTask load_task(const std::string& json_path) {
 
     size_t na = task.num_agents();
 
-    auto& is = j.at("initial-state");
+    const auto is = j.at("initial-state");
 
-    std::unordered_map<std::string, WorldIdx> world_idx;
-
+    // Views into the document; it outlives every lookup below.
+    std::unordered_map<std::string_view, WorldIdx> world_idx;
+    bool worlds_numbered = true;   // names are exactly w0, w1, … in order
     {
         WorldIdx idx = 0;
-        for (auto& w : is.at("worlds"))
-            world_idx[w.get<std::string>()] = idx++;
+        const auto worlds = is.at("worlds");
+        world_idx.reserve(worlds.size());
+        for (const auto w : worlds) {
+            const std::string_view name = w.str();
+            worlds_numbered = worlds_numbered && name == "w" + std::to_string(idx);
+            world_idx[name] = idx++;
+        }
     }
+    // kNoWorld if unknown.
+    const auto world_of = [&](std::string_view name) -> WorldIdx {
+        if (worlds_numbered && name.size() > 1 && name[0] == 'w') {
+            WorldIdx k = 0;
+            const auto r = std::from_chars(name.data() + 1, name.data() + name.size(), k);
+            if (r.ec == std::errc{} && r.ptr == name.data() + name.size() &&
+                k < world_idx.size() && (name.size() == 2 || name[1] != '0'))
+                return k;
+        }
+        const auto it = world_idx.find(name);
+        return it == world_idx.end() ? kNoWorld : it->second;
+    };
+    std::unordered_map<std::string_view, AtomIdx> atom_sv;
+    atom_sv.reserve(task.atom_names.size());
+    for (AtomIdx p = 0; p < task.atom_names.size(); ++p)
+        atom_sv[task.atom_names[p]] = p;
 
     size_t nw = world_idx.size();
 
@@ -324,48 +342,48 @@ PlanningTask load_task(const std::string& json_path) {
                        static_cast<std::uint32_t>(na));
 
     for (auto& [wname, atoms] : is.at("labels").items()) {
-        auto it = world_idx.find(wname);
-        if (it == world_idx.end()) continue;
+        const WorldIdx w = world_of(wname);
+        if (w == kNoWorld) continue;
 
-        for (auto& a : atoms) {
-            auto ait = task.atom_index.find(a.get<std::string>());
-            if (ait != task.atom_index.end())
-                task.init.set_atom(it->second, ait->second);
+        for (const auto a : atoms) {
+            auto ait = atom_sv.find(a.str());
+            if (ait != atom_sv.end())
+                task.init.set_atom(w, ait->second);
         }
     }
 
-    for (auto& d : is.at("designated")) {
-        auto it = world_idx.find(d.get<std::string>());
-        if (it != world_idx.end())
-            task.init.set_designated(it->second);
+    for (const auto d : is.at("designated")) {
+        const WorldIdx w = world_of(d.str());
+        if (w != kNoWorld)
+            task.init.set_designated(w);
     }
 
     for (auto& [agent_name, rows] : is.at("relations").items()) {
-        auto ait = task.agent_index.find(agent_name);
+        auto ait = task.agent_index.find(std::string(agent_name));
         if (ait == task.agent_index.end()) continue;
 
         AgentIdx ag = ait->second;
 
         for (auto& [src_wname, targets] : rows.items()) {
-            auto sit = world_idx.find(src_wname);
-            if (sit == world_idx.end()) continue;
+            const WorldIdx src = world_of(src_wname);
+            if (src == kNoWorld) continue;
 
-            for (auto& t : targets) {
-                auto tit = world_idx.find(t.get<std::string>());
-                if (tit != world_idx.end())
-                    task.init.add_edge(ag, sit->second, tit->second);
+            for (const auto t : targets) {
+                const WorldIdx dst = world_of(t.str());
+                if (dst != kNoWorld)
+                    task.init.add_edge(ag, src, dst);
             }
         }
     }
 
     for (auto& [action_name, a_j] : j.at("actions").items()) {
         Action act;
-        act.name       = action_name;
+        act.name       = std::string(action_name);
         act.num_agents = na;
 
         std::unordered_map<std::string, EventIdx> event_idx;
 
-        for (auto& e : a_j.at("events")) {
+        for (const auto e : a_j.at("events")) {
             std::string ename = e.get<std::string>();
             EventIdx eid = static_cast<EventIdx>(act.events.size());
 
@@ -384,7 +402,7 @@ PlanningTask load_task(const std::string& json_path) {
 
         if (a_j.contains("preconditions")) {
             for (auto& [ename, pre_j] : a_j.at("preconditions").items()) {
-                auto it = event_idx.find(ename);
+                auto it = event_idx.find(std::string(ename));
                 if (it == event_idx.end()) continue;
 
                 act.events[it->second].precondition =
@@ -394,13 +412,13 @@ PlanningTask load_task(const std::string& json_path) {
 
         if (a_j.contains("effects")) {
             for (auto& [ename, eff_j] : a_j.at("effects").items()) {
-                auto it = event_idx.find(ename);
+                auto it = event_idx.find(std::string(ename));
                 if (it == event_idx.end() || eff_j.is_null()) continue;
 
                 Event& ev = act.events[it->second];
 
                 for (auto& [atom_name, val_j] : eff_j.items()) {
-                    auto ait = task.atom_index.find(atom_name);
+                    auto ait = task.atom_index.find(std::string(atom_name));
                     if (ait == task.atom_index.end()) continue;
 
                     AtomIdx atom = ait->second;
@@ -420,9 +438,9 @@ PlanningTask load_task(const std::string& json_path) {
             }
         }
 
-        for (auto& d : a_j.at("designated")) {
+        for (const auto d : a_j.at("designated")) {
             std::string ename = d.get<std::string>();
-            auto it = event_idx.find(ename);
+            auto it = event_idx.find(std::string(ename));
             if (it != event_idx.end())
                 act.designated_events.insert(it->second);
         }
@@ -436,10 +454,10 @@ PlanningTask load_task(const std::string& json_path) {
                 std::vector<std::unordered_set<EventIdx>> rel(ne);
 
                 for (auto& [src_ename, targets] : rel_j.items()) {
-                    auto sit = event_idx.find(src_ename);
+                    auto sit = event_idx.find(std::string(src_ename));
                     if (sit == event_idx.end()) continue;
 
-                    for (auto& t : targets) {
+                    for (const auto t : targets) {
                         std::string tname = t.get<std::string>();
                         auto tit = event_idx.find(tname);
                         if (tit != event_idx.end())
@@ -447,7 +465,7 @@ PlanningTask load_task(const std::string& json_path) {
                     }
                 }
 
-                obs_type_rel[obs_type] = std::move(rel);
+                obs_type_rel[std::string(obs_type)] = std::move(rel);
             }
         }
 
@@ -456,13 +474,13 @@ PlanningTask load_task(const std::string& json_path) {
 
         if (a_j.contains("observability-conditions")) {
             for (auto& [agent_name, obs_j] : a_j.at("observability-conditions").items()) {
-                auto ait = task.agent_index.find(agent_name);
+                auto ait = task.agent_index.find(std::string(agent_name));
                 if (ait == task.agent_index.end()) continue;
 
                 AgentIdx ag = ait->second;
 
                 for (auto& [obs_type, cond_j] : obs_j.items()) {
-                    auto rit = obs_type_rel.find(obs_type);
+                    auto rit = obs_type_rel.find(std::string(obs_type));
                     if (rit == obs_type_rel.end()) continue;
 
                     ObsCase oc;

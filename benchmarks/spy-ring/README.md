@@ -39,10 +39,8 @@ Grounded JSON over 1 MB is not committed; `ground.sh` rebuilds it.
 
 ## Aletheia, 60 s limit
 
-| instance | worlds | result |
+| mode | solved | notes |
 |---|---:|---|
-| linear a5-k3-r4 | 8 | GBFS, 18-step plan, 27 ms |
-| linear a6-k3-r4 | 8 | GBFS, 33-step plan, 53 ms |
-| linear a8-k5-r6 | 32 | GBFS, 286-step plan, 1.1 s |
-| sensing a4-k2-r3 | 4 | AO\*, 466k expansions, 6.7 s |
-| sensing a5-k2-r3 and up | 4–64 | timeout; 6–7 GB at a7–a8 |
+| linear | 9/9 | GBFS; a9-k6-r7 (64 worlds) in 3.1 s, plans far from optimal |
+| sensing | 6/9 | replan; a6-k3-r4 in 17 s, 8-leaf policy |
+| sensing a6-k4, a7-k5, a8-k6 | — | timeout; a7–a8 reach 5–6 GB |
