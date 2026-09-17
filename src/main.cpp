@@ -3,6 +3,7 @@
 #include "search.hpp"
 #include "heuristic.hpp"
 #include "selection_policy.hpp"
+#include "parallel.hpp"
 #include "symmetry.hpp"
 
 #include <iostream>
@@ -126,6 +127,7 @@ static void usage(const char* prog) {
         << "  --gbfs         Force GBFS (alias for --strategy gbfs)\n"
         << "  --conditional  Force AO* (alias for --strategy aostar)\n"
         << "  --no-symmetry  Disable agent-symmetry pruning\n"
+        << "  --threads      Worker threads (default: all cores; 1 = serial)\n"
         << "  --help         Show this message\n";
 }
 
@@ -160,6 +162,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--ehc")          strategy_name_arg = "ehc";
         else if (arg == "--gbfs")         strategy_name_arg = "gbfs";
         else if (arg == "--no-symmetry")  symmetry          = false;
+        else if (arg == "--threads"   && i+1 < argc) par::set_threads(std::stoul(argv[++i]));
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
             std::cerr << "Unknown argument: " << arg << "\n";

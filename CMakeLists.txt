@@ -12,6 +12,7 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
 find_package(nlohmann_json 3.10 REQUIRED)
+find_package(Threads REQUIRED)
 
 set(SOURCES
     src/main.cpp
@@ -25,6 +26,7 @@ set(SOURCES
     src/selection_policy.cpp
     src/search.cpp
     src/symmetry.cpp
+    src/parallel.cpp
     src/validator.cpp
 )
 
@@ -37,7 +39,7 @@ if(ALETHEIA_NATIVE)
 endif()
 
 target_include_directories(epistemic_planner PRIVATE include)
-target_link_libraries(epistemic_planner PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(epistemic_planner PRIVATE nlohmann_json::nlohmann_json Threads::Threads)
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_ok OUTPUT ipo_msg)

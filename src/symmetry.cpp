@@ -1,6 +1,7 @@
 #include "symmetry.hpp"
 
 #include "bisimulation.hpp"
+#include "parallel.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -188,42 +189,53 @@ AgentSymmetry AgentSymmetry::detect(const PlanningTask& task) {
 
     const Fingerprint init_fp = bisim_contract(task.init).fingerprint();
 
-    for (AgentIdx a = 0; a < na; ++a) {
-        for (AgentIdx b = a + 1; b < na; ++b) {
-            const auto& an = task.agent_names[a];
-            const auto& bn = task.agent_names[b];
+    std::vector<std::pair<AgentIdx, AgentIdx>> pairs;
+    for (AgentIdx a = 0; a < na; ++a)
+        for (AgentIdx b = a + 1; b < na; ++b) pairs.emplace_back(a, b);
 
-            Swap s{a, b, {}, {}};
-            bool ok = true;
+    // Candidate swaps are independent; large models test them in parallel.
+    std::vector<std::optional<Swap>> found(pairs.size());
+    const auto test = [&](std::size_t k) {
+        const auto [a, b] = pairs[k];
+        const auto& an = task.agent_names[a];
+        const auto& bn = task.agent_names[b];
 
-            s.atom.resize(task.num_atoms());
-            for (AtomIdx p = 0; p < task.num_atoms() && ok; ++p) {
-                s.atom[p] = p;
-                if (auto r = swap_tokens(task.atom_names[p], an, bn)) {
-                    auto it = task.atom_index.find(*r);
-                    if (it == task.atom_index.end()) ok = false;
-                    else                             s.atom[p] = it->second;
-                }
+        Swap s{a, b, {}, {}};
+
+        s.atom.resize(task.num_atoms());
+        for (AtomIdx p = 0; p < task.num_atoms(); ++p) {
+            s.atom[p] = p;
+            if (auto r = swap_tokens(task.atom_names[p], an, bn)) {
+                auto it = task.atom_index.find(*r);
+                if (it == task.atom_index.end()) return;
+                s.atom[p] = it->second;
             }
-
-            s.action.resize(task.num_actions());
-            for (ActionIdx x = 0; x < task.num_actions() && ok; ++x) {
-                s.action[x] = x;
-                if (auto r = swap_tokens(task.actions[x].name, an, bn)) {
-                    auto it = task.action_index.find(*r);
-                    if (it == task.action_index.end()) ok = false;
-                    else                               s.action[x] = it->second;
-                }
-            }
-
-            ok = ok && (!task.goal || equal(*task.goal, s, *task.goal));
-            for (ActionIdx x = 0; x < task.num_actions() && ok; ++x)
-                ok = maps_action(task.actions[x], s, task.actions[s.action[x]]);
-            ok = ok && bisim_contract(rename(task.init, s)).fingerprint() == init_fp;
-
-            if (ok) sym.swaps.push_back(std::move(s));
         }
-    }
+
+        s.action.resize(task.num_actions());
+        for (ActionIdx x = 0; x < task.num_actions(); ++x) {
+            s.action[x] = x;
+            if (auto r = swap_tokens(task.actions[x].name, an, bn)) {
+                auto it = task.action_index.find(*r);
+                if (it == task.action_index.end()) return;
+                s.action[x] = it->second;
+            }
+        }
+
+        if (task.goal && !equal(*task.goal, s, *task.goal)) return;
+        for (ActionIdx x = 0; x < task.num_actions(); ++x)
+            if (!maps_action(task.actions[x], s, task.actions[s.action[x]])) return;
+        if (bisim_contract(rename(task.init, s)).fingerprint() != init_fp) return;
+
+        found[k] = std::move(s);
+    };
+    if (std::size_t(task.init.num_worlds) * pairs.size() >= 4096)
+        par::for_each_index(pairs.size(), test);
+    else
+        for (std::size_t k = 0; k < pairs.size(); ++k) test(k);
+
+    for (auto& f : found)
+        if (f) sym.swaps.push_back(std::move(*f));
     return sym;
 }
 
@@ -238,17 +250,44 @@ StateSymmetry stabiliser(const AgentSymmetry& sym, const EpistemicState& s) {
         return x;
     };
 
-    // Cheap necessary conditions before the canonical-form test.
-    std::vector<std::size_t> edges(na, 0);
+    // Necessary conditions, cheap to check: a swap that fixes s preserves each
+    // agent's multiset of row sizes and the column count of every atom it moves.
+    std::vector<std::uint64_t> row_sig(na, 0);
     for (AgentIdx ag = 0; ag < na; ++ag)
         for (WorldIdx w = 0; w < s.num_worlds; ++w)
-            edges[ag] += bits::count(s.succ(ag, w));
+            row_sig[ag] += bits::mix64(bits::count(s.succ(ag, w)) + 1);
+
+    std::vector<std::uint32_t> column(s.num_atoms, 0);
+    for (WorldIdx w = 0; w < s.num_worlds; ++w)
+        bits::for_each(s.val(w), [&](std::uint32_t p) { ++column[p]; });
+
+    std::vector<const AgentSymmetry::Swap*> cands;
+    for (const auto& sw : sym.swaps) {
+        if (row_sig[sw.a] != row_sig[sw.b]) continue;
+        bool ok = true;
+        for (AtomIdx p = 0; p < s.num_atoms && ok; ++p)
+            ok = column[p] == column[sw.atom[p]];
+        if (ok) cands.push_back(&sw);
+    }
 
     const Fingerprint fp = s.fingerprint();
-    for (const auto& sw : sym.swaps) {
-        if (find(sw.a) == find(sw.b) || edges[sw.a] != edges[sw.b]) continue;
-        if (bisim_contract(rename(s, sw)).fingerprint() != fp) continue;
-        parent[find(sw.a)] = find(sw.b);
+    std::vector<char> fixes(cands.size(), 0);
+    const auto test = [&](std::size_t k) {
+        fixes[k] = bisim_contract(rename(s, *cands[k])).fingerprint() == fp;
+    };
+    if (par::threads() > 1 && std::size_t(s.num_worlds) * cands.size() >= 4096) {
+        par::for_each_index(cands.size(), test);
+    } else {
+        // Serial: skip swaps whose agents are already connected.
+        for (std::size_t k = 0; k < cands.size(); ++k)
+            if (find(cands[k]->a) != find(cands[k]->b)) {
+                test(k);
+                if (fixes[k]) parent[find(cands[k]->a)] = find(cands[k]->b);
+            }
+    }
+    for (std::size_t k = 0; k < cands.size(); ++k) {
+        if (!fixes[k]) continue;
+        parent[find(cands[k]->a)] = find(cands[k]->b);
         st.trivial = false;
     }
     if (st.trivial) return st;
