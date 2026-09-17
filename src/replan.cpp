@@ -71,7 +71,7 @@ outcomes(const EpistemicState& s, const Action& a, Context& c) {
 }
 
 bool out_of_time(Context& c) {
-    if (std::chrono::steady_clock::now() < c.deadline) return false;
+    if (!expired(c.deadline)) return false;
     c.timed_out = true;
     return true;
 }

@@ -34,7 +34,7 @@
 // sorts worlds by a key and assigns class ids in sorted order:
 //
 //   round 0:  key(w) = ( [w ∈ W*], V(w) )
-//   round k:  key(w) = ( class_{k-1}(w), ⟨sorted class_{k-1} of R_i(w)⟩_{i∈Ag} )
+//   round k:  key(w) = ( class_{k-1}(w), ⟨rank of sorted class_{k-1} of R_i(w)⟩_{i∈Ag} )
 //
 // Round 0's key is a function of the model alone. By induction each later key
 // is too, so the class ids at the fixpoint are determined by the isomorphism
@@ -49,25 +49,19 @@
 namespace {
 
 // Thread-local working buffers: no allocation per call beyond the result.
-struct RowGroups {
-    std::vector<std::uint32_t> group_of;   // world → group
-    std::vector<WorldIdx>      rep;        // group → representative world
-    std::vector<bits::Word>    hash;       // world → row hash
-    std::vector<std::int32_t>  set_data;   // N_i per group, last round
-    std::vector<std::uint32_t> set_begin;
-};
-
 struct Scratch {
     std::vector<bits::Word>    reach;
+    std::vector<std::uint8_t>  set_seen;
     std::vector<WorldIdx>      frontier;
     std::vector<std::int32_t>  class_of, next_class;
     std::vector<WorldIdx>      order;
     std::vector<std::int32_t>  key_data;
     std::vector<std::uint32_t> key_begin;
-    std::vector<RowGroups>     groups;
+    std::vector<std::int32_t>  nset_data;    // N(S): sorted classes of S's members
+    std::vector<std::uint32_t> nset_begin;
+    std::vector<std::uint32_t> set_order;
+    std::vector<std::int32_t>  rank_of_set;
     std::vector<std::int32_t>  keys;
-    std::vector<std::uint32_t> group_order;
-    std::vector<std::int32_t>  rank_of_group;
     std::vector<std::uint32_t> stamp;
     std::vector<WorldIdx>      repr;
 };
@@ -77,75 +71,77 @@ Scratch& scratch() {
     return sc;
 }
 
-// Drops worlds unreachable from W*. Word-parallel BFS; returns `s` without
-// copying when every world is reachable.
+thread_local std::uint32_t t_rounds = 0;
+
+// Drops worlds unreachable from W*. Each successor set is expanded once;
+// returns `s` without copying when every world is reachable.
 EpistemicState restrict_to_reachable(EpistemicState s) {
     const std::uint32_t nw = s.num_worlds;
-    const std::uint32_t rw = s.rel_words;
 
-    auto& reach = scratch().reach;
-    reach.assign(rw, 0);
+    auto& sc    = scratch();
+    auto& reach = sc.reach;
+    reach.assign(s.rel_words, 0);
     bits::copy_from(reach, s.designated_bits());
+    sc.set_seen.assign(s.num_sets(), 0);
 
-    auto& frontier = scratch().frontier;
+    auto& frontier = sc.frontier;
     frontier.clear();
     bits::for_each(s.designated_bits(),
                    [&](std::uint32_t w) { frontier.push_back(w); });
 
+    std::size_t reached = frontier.size();
     while (!frontier.empty()) {
         const WorldIdx w = frontier.back();
         frontier.pop_back();
         for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
-            const auto row = s.succ(ag, w);
-            for (std::uint32_t i = 0; i < rw; ++i) {
-                bits::Word fresh = row[i] & ~reach[i];
-                if (!fresh) continue;
-                reach[i] |= fresh;
-                while (fresh) {
-                    frontier.push_back(static_cast<WorldIdx>(
-                        i * bits::kWordBits + std::countr_zero(fresh)));
-                    fresh &= fresh - 1;
-                }
+            const std::uint32_t id = s.succ_set(ag, w);
+            if (sc.set_seen[id]) continue;
+            sc.set_seen[id] = 1;
+            for (WorldIdx v : s.set(id)) {
+                if (bits::test(reach, v)) continue;
+                bits::set(reach, v);
+                frontier.push_back(v);
+                ++reached;
             }
         }
     }
 
-    if (bits::count(reach) == nw) return s;
+    if (reached == nw) return s;
 
     std::vector<WorldIdx> remap;
     return restrict_state(s, reach, remap);
 }
 
-// Groups worlds by identical R_i row, so N_i is computed once per row (once
-// per class on S5). Group ids are not part of the canonical form.
-void group_rows(const EpistemicState& m, AgentIdx ag,
-                std::vector<WorldIdx>& order, RowGroups& g) {
-    const std::uint32_t nw = m.num_worlds;
-    g.group_of.resize(nw);
-    g.rep.clear();
+// N(S) for every set: the sorted, duplicate-free classes of its members.
+void neighbour_classes(const EpistemicState& m, const std::vector<std::int32_t>& class_of,
+                       Scratch& sc) {
+    const std::uint32_t ns = m.num_sets();
+    auto& data  = sc.nset_data;
+    auto& begin = sc.nset_begin;
+    auto& stamp = sc.stamp;
+    data.clear();
+    begin.assign(std::size_t(ns) + 1, 0);
+    if (stamp.size() < m.num_worlds) stamp.assign(m.num_worlds, 0);
 
-    // Sort by row hash; full rows are compared only on equal hashes.
-    g.hash.resize(nw);
-    for (WorldIdx w = 0; w < nw; ++w) {
-        bits::Word h = 0;
-        for (bits::Word word : m.succ(ag, w)) h = bits::mix64(h ^ word);
-        g.hash[w] = h;
+    std::uint32_t token = 0;
+    for (std::uint32_t id = 0; id < ns; ++id) {
+        begin[id] = static_cast<std::uint32_t>(data.size());
+        if (++token == 0) {
+            std::fill(stamp.begin(), stamp.end(), 0);
+            token = 1;
+        }
+        for (WorldIdx v : m.set(id)) {
+            const std::int32_t c = class_of[v];
+            if (stamp[c] != token) {
+                stamp[c] = token;
+                data.push_back(c);
+            }
+        }
+        std::sort(data.begin() + begin[id], data.end());
     }
-    order.resize(nw);
-    for (WorldIdx w = 0; w < nw; ++w) order[w] = w;
-    std::sort(order.begin(), order.end(), [&](WorldIdx x, WorldIdx y) {
-        if (g.hash[x] != g.hash[y]) return g.hash[x] < g.hash[y];
-        const auto rx = m.succ(ag, x), ry = m.succ(ag, y);
-        return std::lexicographical_compare(rx.begin(), rx.end(), ry.begin(), ry.end());
-    });
-
-    g.rep.push_back(order[0]);
-    g.group_of[order[0]] = 0;
-    for (std::uint32_t i = 1; i < nw; ++i) {
-        if (!bits::equal(m.succ(ag, order[i - 1]), m.succ(ag, order[i])))
-            g.rep.push_back(order[i]);
-        g.group_of[order[i]] = static_cast<std::uint32_t>(g.rep.size() - 1);
-    }
+    begin[ns] = static_cast<std::uint32_t>(data.size());
+    // Stamps are per call; leave them zeroed for the next one.
+    std::fill(stamp.begin(), stamp.end(), 0);
 }
 
 } // namespace
@@ -206,77 +202,50 @@ EpistemicState bisim_contract(EpistemicState s) {
 
     //  Rounds 1..: split on neighbour classes.
     //
-    // key(w) = (class(w), rank_1(N_1(w)), …), N_i(w) = { class(v) | v ∈ R_i(w) },
-    // rank_i ordering distinct N_i by (size, contents). This is the order of the
-    // length-prefixed key it replaces, so the numbering is unchanged.
-    auto& groups = sc.groups;
-    if (groups.size() < na) groups.resize(na);
-    for (AgentIdx ag = 0; ag < na; ++ag) group_rows(m, ag, order, groups[ag]);
-
-    const std::size_t key_width = std::size_t(na) + 1;
+    // key(w) = (class(w), rank(N(R_1(w))), …), N(S) = { class(v) | v ∈ S },
+    // rank ordering distinct N by (size, contents). Ranks are taken over all
+    // sets rather than per agent: the order they induce on each agent's sets
+    // is the same, so the numbering is unchanged.
+    const std::uint32_t ns        = m.num_sets();
+    const std::size_t   key_width = std::size_t(na) + 1;
     auto& keys = sc.keys;
     keys.resize(std::size_t(nw) * key_width);
 
-    auto& group_order   = sc.group_order;
-    auto& rank_of_group = sc.rank_of_group;
-    auto& stamp         = sc.stamp;
-    stamp.assign(nw, 0);
-    std::uint32_t stamp_token = 0;
+    auto& set_order   = sc.set_order;
+    auto& rank_of_set = sc.rank_of_set;
 
     std::int32_t num_classes = *std::max_element(class_of.begin(), class_of.end()) + 1;
 
+    t_rounds = 0;
     for (;;) {
-        for (WorldIdx w = 0; w < nw; ++w)
-            keys[std::size_t(w) * key_width] = class_of[w];
+        ++t_rounds;
+        neighbour_classes(m, class_of, sc);
+        const auto nset_at = [&](std::uint32_t id) {
+            return std::span<const std::int32_t>(sc.nset_data.data() + sc.nset_begin[id],
+                                                 sc.nset_begin[id + 1] - sc.nset_begin[id]);
+        };
 
-        for (AgentIdx ag = 0; ag < na; ++ag) {
-            RowGroups&       g  = groups[ag];
-            const auto       ng = static_cast<std::uint32_t>(g.rep.size());
-            auto& set_data  = g.set_data;
-            auto& set_begin = g.set_begin;
+        set_order.resize(ns);
+        for (std::uint32_t id = 0; id < ns; ++id) set_order[id] = id;
+        std::sort(set_order.begin(), set_order.end(), [&](std::uint32_t a, std::uint32_t b) {
+            const auto sa = nset_at(a), sb = nset_at(b);
+            if (sa.size() != sb.size()) return sa.size() < sb.size();
+            return std::lexicographical_compare(sa.begin(), sa.end(), sb.begin(), sb.end());
+        });
+        rank_of_set.resize(ns);
+        std::int32_t rank = 0;
+        rank_of_set[set_order[0]] = 0;
+        for (std::uint32_t i = 1; i < ns; ++i) {
+            const auto sa = nset_at(set_order[i - 1]), sb = nset_at(set_order[i]);
+            if (!std::equal(sa.begin(), sa.end(), sb.begin(), sb.end())) ++rank;
+            rank_of_set[set_order[i]] = rank;
+        }
 
-            set_data.clear();
-            set_begin.assign(ng + 1, 0);
-            for (std::uint32_t gi = 0; gi < ng; ++gi) {
-                set_begin[gi] = static_cast<std::uint32_t>(set_data.size());
-                ++stamp_token;
-                bits::for_each(m.succ(ag, g.rep[gi]), [&](std::uint32_t v) {
-                    const std::int32_t c = class_of[v];
-                    if (stamp[c] != stamp_token) {
-                        stamp[c] = stamp_token;
-                        set_data.push_back(c);
-                    }
-                });
-                std::sort(set_data.begin() + set_begin[gi], set_data.end());
-            }
-            set_begin[ng] = static_cast<std::uint32_t>(set_data.size());
-
-            const auto set_at = [&](std::uint32_t gi) {
-                return std::span<const std::int32_t>(set_data.data() + set_begin[gi],
-                                                     set_begin[gi + 1] - set_begin[gi]);
-            };
-
-            group_order.resize(ng);
-            for (std::uint32_t gi = 0; gi < ng; ++gi) group_order[gi] = gi;
-            std::sort(group_order.begin(), group_order.end(),
-                      [&](std::uint32_t a, std::uint32_t b) {
-                          const auto sa = set_at(a), sb = set_at(b);
-                          if (sa.size() != sb.size()) return sa.size() < sb.size();
-                          return std::lexicographical_compare(sa.begin(), sa.end(),
-                                                              sb.begin(), sb.end());
-                      });
-
-            rank_of_group.resize(ng);
-            std::int32_t rank = 0;
-            rank_of_group[group_order[0]] = 0;
-            for (std::uint32_t i = 1; i < ng; ++i) {
-                const auto sa = set_at(group_order[i - 1]), sb = set_at(group_order[i]);
-                if (!std::equal(sa.begin(), sa.end(), sb.begin(), sb.end())) ++rank;
-                rank_of_group[group_order[i]] = rank;
-            }
-
-            for (WorldIdx w = 0; w < nw; ++w)
-                keys[std::size_t(w) * key_width + 1 + ag] = rank_of_group[g.group_of[w]];
+        for (WorldIdx w = 0; w < nw; ++w) {
+            const std::size_t k = std::size_t(w) * key_width;
+            keys[k] = class_of[w];
+            for (AgentIdx ag = 0; ag < na; ++ag)
+                keys[k + 1 + ag] = rank_of_set[m.succ_set(ag, w)];
         }
 
         const auto key_at = [&](WorldIdx w) {
@@ -307,7 +276,9 @@ EpistemicState bisim_contract(EpistemicState s) {
 
     // Quotient.
     //
-    // Class ids are already canonical, so world c of the result is class c.
+    // Class ids are already canonical, so world c of the result is class c. The
+    // last round's N(S) were computed from the final classes; interning them by
+    // content in (agent, class) order numbers the sets canonically too.
     auto& repr = sc.repr;
     repr.assign(num_classes, kNoWorld);
     for (WorldIdx w = 0; w < nw; ++w)
@@ -319,15 +290,21 @@ EpistemicState bisim_contract(EpistemicState s) {
     for (std::int32_t c = 0; c < num_classes; ++c)
         bits::copy_from(out.val(static_cast<WorldIdx>(c)), m.val(repr[c]));
 
-    // The last round's N_i were computed from the final classes.
-    for (AgentIdx ag = 0; ag < na; ++ag) {
-        const RowGroups& g = groups[ag];
-        for (std::int32_t c = 0; c < num_classes; ++c) {
-            auto dst = out.succ(ag, static_cast<WorldIdx>(c));
-            const std::uint32_t gi = g.group_of[repr[c]];
-            for (std::uint32_t k = g.set_begin[gi]; k < g.set_begin[gi + 1]; ++k)
-                bits::set(dst, static_cast<WorldIdx>(g.set_data[k]));
-        }
+    {
+        SetInterner interner(out);
+        thread_local std::vector<WorldIdx> buf;
+        std::vector<std::uint32_t> out_id(ns, UINT32_MAX);
+        const auto nc = static_cast<std::uint32_t>(num_classes);
+        for (AgentIdx ag = 0; ag < na; ++ag)
+            for (std::uint32_t c = 0; c < nc; ++c) {
+                const std::uint32_t id = m.succ_set(ag, repr[c]);
+                if (out_id[id] == UINT32_MAX) {
+                    buf.assign(sc.nset_data.begin() + sc.nset_begin[id],
+                               sc.nset_data.begin() + sc.nset_begin[id + 1]);
+                    out_id[id] = interner.intern(buf);
+                }
+                out.set_of[std::size_t(ag) * nc + c] = out_id[id];
+            }
     }
 
     // Designation is constant within a class by construction (round 0 split on
@@ -339,3 +316,5 @@ EpistemicState bisim_contract(EpistemicState s) {
     out.invalidate();
     return out;
 }
+
+std::uint32_t last_refinement_rounds() noexcept { return t_rounds; }

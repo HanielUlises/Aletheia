@@ -5,6 +5,8 @@
 #include "selection_policy.hpp"
 #include "knowledge_relaxation.hpp"
 #include "parallel.hpp"
+#include "portfolio.hpp"
+#include "signature.hpp"
 #include "symmetry.hpp"
 
 #include <iostream>
@@ -61,7 +63,7 @@ static void write_linear_plan(std::ostream& out,
     out << "]\n";
 }
 
-enum class Strategy { GBFS, EHC, AOSTAR, REPLAN };
+enum class Strategy { GBFS, EHC, AOSTAR, REPLAN, PORTFOLIO };
 
 static bool has_sensing_actions(const PlanningTask& task) {
     for (auto& action : task.actions)
@@ -79,6 +81,8 @@ static std::unique_ptr<Heuristic> make_heuristic(const std::string& label,
     if (label == "rpg")  return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Max);
     if (label == "radd") return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Add);
     if (label == "kadd") return std::make_unique<KnowledgeRelaxationHeuristic>(task);
+    if (label == "kff")  return std::make_unique<KnowledgeRelaxationHeuristic>(
+                             task, KnowledgeRelaxationHeuristic::Estimate::FF);
     return nullptr;
 }
 
@@ -92,6 +96,7 @@ static const char* heuristic_display(const std::string& label) {
     if (label == "rpg")  return "relaxed-closure (max)";
     if (label == "radd") return "relaxed-closure (add)";
     if (label == "kadd") return "knowledge-relaxation (add)";
+    if (label == "kff")  return "knowledge-relaxation (ff)";
     return "unknown";  // unreachable: make_heuristic rejects the label first
 }
 
@@ -100,6 +105,7 @@ static std::optional<Strategy> parse_strategy(const std::string& label) {
     if (label == "ehc")    return Strategy::EHC;
     if (label == "aostar") return Strategy::AOSTAR;
     if (label == "replan") return Strategy::REPLAN;
+    if (label == "portfolio") return Strategy::PORTFOLIO;
     return std::nullopt;
 }
 
@@ -107,6 +113,7 @@ static const char* strategy_name(Strategy s) {
     switch (s) {
         case Strategy::AOSTAR: return "AO*";
         case Strategy::REPLAN: return "replan";
+        case Strategy::PORTFOLIO: return "portfolio";
         case Strategy::EHC:    return "EHC";
         default:               return "GBFS";
     }
@@ -121,8 +128,8 @@ static void usage(const char* prog) {
         << "Options:\n"
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
-        << "  --heuristic    ug | ed | ks | wc | rpg | radd | kadd  (default: auto)\n"
-        << "  --strategy     gbfs | ehc | aostar | replan    (default: auto)\n"
+        << "  --heuristic    ug | ed | ks | wc | rpg | radd | kadd | kff  (default: auto)\n"
+        << "  --strategy     gbfs | ehc | aostar | replan | portfolio  (default: auto)\n"
         << "  --policy       Selection-policy JSON; overrides the built-in\n"
         << "                 rules used to auto-select strategy and heuristic\n"
         << "  --print-policy Write the effective policy to stdout and exit\n"
@@ -136,6 +143,7 @@ static void usage(const char* prog) {
         << "  --kd45-repair  Delete non-serial worlds after KD45 updates\n"
         << "  --no-portfolio Auto-selected AO* keeps the whole budget\n"
         << "  --no-helpful   GBFS expands every action, not preferred ones first\n"
+        << "  --signature    Print the task's structural signature as JSON and exit\n"
         << "  --threads      Worker threads (default: all cores; 1 = serial)\n"
         << "  --help         Show this message\n";
 }
@@ -157,6 +165,7 @@ int main(int argc, char* argv[]) {
     bool kd45_repair  = false;
     bool portfolio_on = true;
     bool helpful_on   = true;
+    bool signature    = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -177,6 +186,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--kd45-repair")  kd45_repair       = true;
         else if (arg == "--no-portfolio") portfolio_on      = false;
         else if (arg == "--no-helpful")   helpful_on        = false;
+        else if (arg == "--signature")    signature         = true;
         else if (arg == "--threads"   && i+1 < argc) par::set_threads(std::stoul(argv[++i]));
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
@@ -224,6 +234,11 @@ int main(int argc, char* argv[]) {
         auto sym = std::make_shared<AgentSymmetry>(AgentSymmetry::detect(task));
         std::cerr << "[symmetry] " << sym->swaps.size() << " agent swaps\n";
         if (!sym->empty()) task.symmetry = std::move(sym);
+    }
+
+    if (signature) {
+        print_signature(task, std::cout);
+        return 0;
     }
 
     if (explain) {
@@ -290,6 +305,31 @@ int main(int argc, char* argv[]) {
     if (!out.is_open()) {
         std::cerr << "Error: cannot open output file: " << plan_path << "\n";
         return 1;
+    }
+
+    if (strategy == Strategy::PORTFOLIO) {
+        std::cerr << "[main] Mode: portfolio\n";
+        const Deadline deadline = timeout_secs > 0
+            ? Clock::now() + std::chrono::seconds(timeout_secs) : Deadline::max();
+        const KnowledgeRelaxationHeuristic relaxation(task);
+        const KnowledgeSpreadHeuristic     spread;
+        PortfolioOutcome o = race(task, relaxation, spread, deadline);
+
+        if (o.linear) {
+            write_linear_plan(out, *o.linear);
+            std::cerr << "[main] Plan written to " << plan_path << " (" << o.member << ")\n";
+        } else if (o.contingent) {
+            if (!o.contingent->plan_tree) out << "[]\n";
+            else { write_plan_tree(out, o.contingent->plan_tree); out << "\n"; }
+            std::cerr << "[main] Conditional plan written to " << plan_path << " (" << o.member << ")\n";
+            auto vr = validate(task, o.contingent->plan_tree);
+            std::cerr << (vr.valid ? "[validator] OK\n" : "[validator] FAILED — " + vr.error + "\n");
+        } else {
+            out << "null\n";
+            std::cerr << (o.unsolvable ? "[main] No solution found (no policy exists).\n"
+                                       : "[main] No solution found.\n");
+        }
+        return 0;
     }
 
     if (strategy == Strategy::AOSTAR || strategy == Strategy::REPLAN) {

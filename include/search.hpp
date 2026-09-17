@@ -3,6 +3,7 @@
 #include "outcome.hpp"
 #include "task.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -39,9 +40,8 @@ struct PlannerStats {
     std::size_t max_frontier_size{0};
     std::size_t closed_size{0};
 
-    // Bytes of Kripke-model storage held live by the search at its peak. With
-    // the bit-matrix representation this is the planner's dominant allocation,
-    // so it is the number worth reporting.
+    // Bytes of Kripke-model storage held live by the search at its peak: the
+    // planner's dominant allocation, so it is the number worth reporting.
     std::size_t peak_state_bytes{0};
 
     float initial_h{0.f};
@@ -76,6 +76,11 @@ struct SearchResult {
 };
 
 using Deadline = std::chrono::steady_clock::time_point;
+
+// Cooperative cancellation: a thread may install a flag that makes every
+// deadline check of the searches it runs report expiry.
+void set_cancel_flag(const std::atomic<bool>* flag) noexcept;
+[[nodiscard]] bool expired(Deadline d) noexcept;
 
 namespace gbfs {
 

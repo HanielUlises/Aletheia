@@ -1,4 +1,6 @@
 #include "parser.hpp"
+
+#include <algorithm>
 #include "formula.hpp"
 #include "heuristic.hpp"
 #include "json.hpp"
@@ -358,22 +360,39 @@ PlanningTask load_task(const std::string& json_path) {
             task.init.set_designated(w);
     }
 
-    for (auto& [agent_name, rows] : is.at("relations").items()) {
-        auto ait = task.agent_index.find(std::string(agent_name));
-        if (ait == task.agent_index.end()) continue;
+    {
+        SetInterner interner(task.init);
+        std::vector<WorldIdx> succ;
+        for (auto& [agent_name, rows] : is.at("relations").items()) {
+            auto ait = task.agent_index.find(std::string(agent_name));
+            if (ait == task.agent_index.end()) continue;
 
-        AgentIdx ag = ait->second;
+            AgentIdx ag = ait->second;
 
-        for (auto& [src_wname, targets] : rows.items()) {
-            const WorldIdx src = world_of(src_wname);
-            if (src == kNoWorld) continue;
+            for (auto& [src_wname, targets] : rows.items()) {
+                const WorldIdx src = world_of(src_wname);
+                if (src == kNoWorld) continue;
 
-            for (const auto t : targets) {
-                const WorldIdx dst = world_of(t.str());
-                if (dst != kNoWorld)
-                    task.init.add_edge(ag, src, dst);
+                succ.clear();
+                for (const auto t : targets) {
+                    const WorldIdx dst = world_of(t.str());
+                    if (dst != kNoWorld) succ.push_back(dst);
+                }
+                std::sort(succ.begin(), succ.end());
+                succ.erase(std::unique(succ.begin(), succ.end()), succ.end());
+
+                // A world listed twice for one agent keeps the union of its rows.
+                const auto cur = task.init.succ(ag, src);
+                if (!cur.empty()) {
+                    std::vector<WorldIdx> merged;
+                    std::set_union(cur.begin(), cur.end(), succ.begin(), succ.end(),
+                                   std::back_inserter(merged));
+                    succ.swap(merged);
+                }
+                task.init.set_of[std::size_t(ag) * task.init.num_worlds + src] = interner.intern(succ);
             }
         }
+        task.init.invalidate();
     }
 
     for (auto& [action_name, a_j] : j.at("actions").items()) {

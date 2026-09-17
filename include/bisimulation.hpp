@@ -11,3 +11,6 @@
 //
 // Call after every product update. Takes by value so callers can std::move in.
 [[nodiscard]] EpistemicState bisim_contract(EpistemicState s);
+
+// Refinement rounds of this thread's last contraction.
+[[nodiscard]] std::uint32_t last_refinement_rounds() noexcept;

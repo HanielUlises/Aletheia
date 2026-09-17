@@ -40,8 +40,8 @@ holds `null`. An empty array means the goal already held.
 |---|---|
 | `--task <path>` | Grounded JSON task (required) |
 | `--plan <path>` | Output plan file (required) |
-| `--heuristic <label>` | `ug`, `ed`, `ks`, `wc`, `rpg`, `radd`, `kadd`. Default: chosen by policy |
-| `--strategy <label>` | `gbfs`, `ehc`, `aostar`, `replan`. Default: chosen by policy |
+| `--heuristic <label>` | `ug`, `ed`, `ks`, `wc`, `rpg`, `radd`, `kadd`, `kff`. Default: chosen by policy |
+| `--strategy <label>` | `gbfs`, `ehc`, `aostar`, `replan`, `portfolio` (races compatible configurations in parallel). Default: chosen by policy |
 | `--policy <path>` | Selection-policy JSON; replaces the built-in rules |
 | `--print-policy` | Write the effective policy to stdout and exit |
 | `--explain` | Report the task features and which rule decided each auto-selection |
@@ -53,6 +53,7 @@ holds `null`. An empty array means the goal already held.
 | `--kd45-repair` | Delete non-serial worlds after KD45 updates. Off by default, matching plank |
 | `--no-portfolio` | Auto-selected AO\* on sensing tasks keeps the whole budget instead of handing over to replan |
 | `--no-helpful` | GBFS expands every action instead of the relaxed plan's helpful actions first |
+| `--signature` | Print the task's structural signature (topology, fixed-point depths, growth, symmetry) as JSON and exit |
 | `--help` | Show usage |
 
 An unknown heuristic or strategy label is an error listing the valid ones, not
@@ -131,7 +132,7 @@ starts:
 | `goal_unsat_init` | top-level goal conjuncts false in the initial state |
 
 Outcomes must be `gbfs`, `ehc`, `aostar`, or `replan` for strategy, and `ug`, `ed`, `ks`,
-`wc`, `rpg`, `radd`, `kadd` for heuristic.
+`wc`, `rpg`, `radd`, `kadd`, `kff` for heuristic.
 
 ### Validation
 

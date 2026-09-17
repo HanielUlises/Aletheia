@@ -115,8 +115,8 @@ struct KnowledgeSpreadHeuristic : Heuristic {
 // announcements have preconditions which must themselves be established, that
 // events which prune well in the relaxation may be inconsistent with the actual
 // world, and that ontic effects can restore uncertainty. It costs
-// O(L · |A| · |E| · |φ| · |W|²/64) with L ≤ |W| layers, which the bit-matrix
-// representation makes cheap enough to run at every node.
+// O(L · |A| · |E| · (|φ| · |W| + Σ|sets|)) with L ≤ |W| layers, which the set
+// table makes cheap enough to run at every node.
 //
 // Two aggregations over the per-conjunct levels, as with h_max and h_add:
 //

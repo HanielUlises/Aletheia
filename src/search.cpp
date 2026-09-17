@@ -39,6 +39,18 @@
 // re-expand states already closed.
 
 
+
+namespace {
+thread_local const std::atomic<bool>* t_cancel = nullptr;
+} // namespace
+
+void set_cancel_flag(const std::atomic<bool>* flag) noexcept { t_cancel = flag; }
+
+bool expired(Deadline d) noexcept {
+    return (t_cancel && t_cancel->load(std::memory_order_relaxed)) ||
+           std::chrono::steady_clock::now() >= d;
+}
+
 namespace {
 
 // Stabiliser of a canonical state under the task's agent swaps.
@@ -94,8 +106,9 @@ void build_successor(const EpistemicState& parent, const Action& action,
     out.state = EpistemicState{};
 }
 
-// Successors built at once without exceeding half the free memory: a product
-// update materialises up to (|W|·|E|)² bits per agent before contraction.
+// Successors built at once without exceeding half the free memory. A product
+// update keeps |W|·|E| worlds before contraction; bound its set table by one
+// successor list of every world per agent, plus contraction's working keys.
 std::size_t parallel_batch(const EpistemicState& s, const PlanningTask& task) {
     static std::size_t max_events = [&] {
         std::size_t m = 1;
@@ -103,7 +116,8 @@ std::size_t parallel_batch(const EpistemicState& s, const PlanningTask& task) {
         return m;
     }();
     const double worlds = double(s.num_worlds) * double(max_events);
-    const double bytes  = 2.0 * worlds * worlds / 8.0 * double(std::max<std::uint32_t>(1, s.num_agents));
+    const double per_world = double(s.members.size()) / double(std::max<std::uint32_t>(1, s.num_worlds)) + 1.0;
+    const double bytes  = 4.0 * worlds * double(std::max<std::uint32_t>(1, s.num_agents)) * (per_world + 4.0) * 3.0;
     const double avail  = 0.5 * double(sysconf(_SC_AVPHYS_PAGES)) * double(sysconf(_SC_PAGESIZE));
     const double batch  = bytes > 0 ? avail / bytes : double(par::threads());
     return std::size_t(std::clamp(batch, 1.0, double(par::threads())));
@@ -218,7 +232,7 @@ std::optional<SearchResult> run(const PlanningTask& task, const Heuristic& h,
             result.stats.stop_timer();
             return std::nullopt;
         }
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (expired(deadline)) {
             std::cerr << "[gbfs] Deadline exceeded at "
                       << result.stats.nodes_expanded << " nodes.\n";
             result.stats.stop_timer();
@@ -266,14 +280,14 @@ std::optional<SearchResult> run(const PlanningTask& task, const Heuristic& h,
             warm_extensions(parent, task);
             const std::size_t batch = parallel_batch(parent, task);
             for (std::size_t at = 0; at < cands.size(); at += batch) {
-                if (std::chrono::steady_clock::now() >= deadline) break;
+                if (expired(deadline)) break;
                 par::for_each_index(std::min(batch, cands.size() - at),
                                     [&](std::size_t i) { build(at + i); });
             }
         }
 
         for (std::size_t k = 0; k < cands.size(); ++k) {
-            if (std::chrono::steady_clock::now() >= deadline) {
+            if (expired(deadline)) {
                 std::cerr << "[gbfs] Deadline exceeded at "
                           << result.stats.nodes_expanded << " nodes.\n";
                 result.stats.stop_timer();
@@ -356,7 +370,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
                                    std::size_t max_nodes, Deadline deadline) {
     bool pruned = false;
     auto r = run(task, h, max_nodes, deadline, task.helpful_actions, pruned);
-    if (r || !pruned || std::chrono::steady_clock::now() >= deadline) return r;
+    if (r || !pruned || expired(deadline)) return r;
     std::cerr << "[gbfs] Retrying without helpful-action pruning.\n";
     return run(task, h, max_nodes, deadline, false, pruned);
 }
@@ -479,7 +493,7 @@ std::vector<Expansion> expand(const EpistemicState& s, Context& ctx) {
 DfsResult dfs(const EpistemicState& s, std::size_t depth, Context& ctx) {
     ctx.stats.nodes_expanded++;
 
-    if (std::chrono::steady_clock::now() >= ctx.deadline) {
+    if (expired(ctx.deadline)) {
         // Also counts as truncation: the iteration did not finish, so its
         // failure is no evidence that the space was searched.
         ctx.truncated = true;
@@ -588,7 +602,7 @@ search(const PlanningTask& task, const Heuristic& h,
     const std::size_t depth_limit = (max_depth == 0) ? SIZE_MAX : max_depth;
 
     for (std::size_t depth = 0; depth <= depth_limit; ++depth) {
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (expired(deadline)) {
             std::cerr << "[aostar] Timeout at depth " << depth << ".\n";
             out.stats.stop_timer();
             return std::nullopt;
@@ -676,7 +690,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             std::cerr << "[ehc] Node limit reached (" << max_nodes << ").\n";
             return true;
         }
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (expired(deadline)) {
             std::cerr << "[ehc] Deadline exceeded.\n";
             return true;
         }

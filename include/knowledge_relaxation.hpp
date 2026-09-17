@@ -25,9 +25,22 @@
 // interning; facts and operators that cannot reach the goal are dropped.
 class KnowledgeRelaxationHeuristic : public Heuristic {
 public:
-    explicit KnowledgeRelaxationHeuristic(const PlanningTask& task);
+    // Add sums goal-conjunct costs (kadd); FF counts the operators of the
+    // relaxed plan extracted from the same fixpoint (kff).
+    enum class Estimate : std::uint8_t { Add, FF };
+
+    explicit KnowledgeRelaxationHeuristic(const PlanningTask& task, Estimate estimate = Estimate::Add);
 
     float operator()(const EpistemicState& s, const PlanningTask& task) const override;
+
+    struct Analysis {
+        std::uint32_t rounds{0};          // fixpoint rounds
+        std::uint32_t depth{0};           // largest finite goal-conjunct cost
+        std::uint32_t dead_goals{0};      // goal conjuncts unreachable in the relaxation
+        std::uint32_t relaxed_plan{0};    // operators in the extracted relaxed plan
+        std::uint32_t facts{0}, operators{0};
+    };
+    [[nodiscard]] Analysis analyse(const EpistemicState& s) const;
 
     // Applicable actions of a relaxed plan extracted from the cost fixpoint.
     bool preferred(const EpistemicState& s, const PlanningTask& task,
@@ -55,9 +68,14 @@ private:
     void          prune();
     // Cost fixpoint at s; supporter[f] is the operator giving fact f its cost,
     // or -1 when initial or derived.
-    void          costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
+    std::uint32_t costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
                         std::vector<std::int32_t>& rc, std::vector<std::int32_t>* supporter) const;
+    // Relaxed plan backchained from the goal; returns its operator count and
+    // appends to `helpful` the actions of operators applicable now.
+    std::uint32_t extract(const std::vector<std::int32_t>& rc, const std::vector<std::int32_t>& sup,
+                          std::vector<ActionIdx>* helpful) const;
 
+    Estimate      estimate_{Estimate::Add};
     ActionIdx     current_action_{0};
 
     std::vector<Req>           reqs_;

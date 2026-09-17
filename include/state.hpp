@@ -4,6 +4,10 @@
 #include "types.hpp"
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <span>
 
 class SatCache;   // defined in state.cpp
@@ -30,30 +34,39 @@ struct FingerprintHash {
 
 // Epistemic state = multi-pointed Kripke model (W, {R_i}_{i∈Ag}, V, W*).
 //
-// Storage is three flat word arrays and nothing else:
+// Storage:
 //
 //   valuation   num_worlds × val_words     V : W → 2^P as a bit matrix
-//   relation    num_agents × num_worlds × rel_words
-//                                          each R_i ⊆ W × W as a bit matrix,
-//                                          row-major by source world
+//   set_of      num_agents × num_worlds    R_i(w) as an index into the set table
+//   set_begin   num_sets + 1               offsets into members
+//   members     Σ |set|                    successor sets, sorted world lists
 //   designated  rel_words                  W* ⊆ W
 //
-// Two consequences drive the rest of the planner. Modal operators become
-// word-parallel: [i]φ holds at w exactly when R_i(w) ∧ ¬sat(φ) is empty, which
-// costs ⌈|W|/64⌉ ANDNOT tests regardless of how many successors w has. And the
-// whole model is three contiguous allocations, so copying a state is three
-// memcpys and hashing it is a linear scan with no pointer chasing.
+// Accessibility is a table of successor sets, not a bit matrix. Epistemic
+// models repeat successor sets heavily: on K45 frames (transitive and
+// Euclidean, which covers S5 and KD45) two successor sets of one agent are
+// equal or disjoint, the product update with K45 event relations and the
+// bisimulation quotient both preserve the frame, and so an agent's sets hold
+// at most |W| entries together. A bit matrix costs |Ag|·|W|² bits whatever the
+// frame: 553 MB for one 19 210-world IεPC hard gossip state. Modal operators
+// read the table once per set: [i]φ holds at w exactly when every member of
+// R_i(w) is in sat(φ), which is decided once for each distinct set.
+//
+// Set ids carry no meaning. States produced by bisim_contract intern sets by
+// content in canonical order, so equal contracted states are equal arrays.
 struct EpistemicState {
     std::uint32_t num_worlds{0};
     std::uint32_t num_atoms{0};
     std::uint32_t num_agents{0};
 
     std::uint32_t val_words{0};   // = words_for(num_atoms)
-    std::uint32_t rel_words{0};   // = words_for(num_worlds)
+    std::uint32_t rel_words{0};   // = words_for(num_worlds): one world set
 
-    std::vector<bits::Word> valuation;
-    std::vector<bits::Word> relation;
-    std::vector<bits::Word> designated;
+    std::vector<bits::Word>    valuation;
+    std::vector<std::uint32_t> set_of;
+    std::vector<std::uint32_t> set_begin;
+    std::vector<WorldIdx>      members;
+    std::vector<bits::Word>    designated;
 
     // All five are defined out of line: SatCache is incomplete here, and
     // std::unique_ptr needs the complete type to destroy it.
@@ -61,13 +74,14 @@ struct EpistemicState {
 
     // The satisfaction cache and the fingerprint are derived data. They are
     // rebuilt lazily rather than copied, so copy construction stays a plain
-    // copy of the three arrays.
+    // copy of the arrays.
     EpistemicState(const EpistemicState& o);
     EpistemicState& operator=(const EpistemicState& o);
     EpistemicState(EpistemicState&&) noexcept;
     EpistemicState& operator=(EpistemicState&&) noexcept;
     ~EpistemicState();
 
+    // Every world starts with the empty successor set, which is set 0.
     void allocate(std::uint32_t worlds, std::uint32_t atoms, std::uint32_t agents);
 
     // Element access.
@@ -76,10 +90,14 @@ struct EpistemicState {
     [[nodiscard]] bits::ConstWordSpan val(WorldIdx w) const noexcept
         { return {valuation.data() + std::size_t(w) * val_words, val_words}; }
 
-    [[nodiscard]] bits::WordSpan succ(AgentIdx ag, WorldIdx w) noexcept
-        { return {relation.data() + row_offset(ag, w), rel_words}; }
-    [[nodiscard]] bits::ConstWordSpan succ(AgentIdx ag, WorldIdx w) const noexcept
-        { return {relation.data() + row_offset(ag, w), rel_words}; }
+    [[nodiscard]] std::uint32_t num_sets() const noexcept
+        { return static_cast<std::uint32_t>(set_begin.size() - 1); }
+    [[nodiscard]] std::uint32_t succ_set(AgentIdx ag, WorldIdx w) const noexcept
+        { return set_of[std::size_t(ag) * num_worlds + w]; }
+    [[nodiscard]] std::span<const WorldIdx> set(std::uint32_t id) const noexcept
+        { return {members.data() + set_begin[id], set_begin[id + 1] - set_begin[id]}; }
+    [[nodiscard]] std::span<const WorldIdx> succ(AgentIdx ag, WorldIdx w) const noexcept
+        { return set(succ_set(ag, w)); }
 
     [[nodiscard]] bits::WordSpan designated_bits() noexcept
         { return {designated.data(), rel_words}; }
@@ -97,8 +115,11 @@ struct EpistemicState {
     // state, not on one that has already been evaluated.
     void set_atom(WorldIdx w, AtomIdx a)  { bits::set(val(w), a);            invalidate(); }
     void set_designated(WorldIdx w)       { bits::set(designated_bits(), w); invalidate(); }
-    void add_edge(AgentIdx ag, WorldIdx from, WorldIdx to)
-                                          { bits::set(succ(ag, from), to);   invalidate(); }
+
+    // Appends a set given as a sorted, duplicate-free world list and returns
+    // its id. No deduplication, and no cache invalidation: callers building or
+    // rewriting relations point worlds at the result through set_of.
+    std::uint32_t add_set(std::span<const WorldIdx> sorted_members);
 
     // Model checking.
     //
@@ -125,9 +146,10 @@ struct EpistemicState {
 
     // Identity.
     //
-    // These compare the *labelled* structure. They are exact up to isomorphism
-    // only for states produced by bisim_contract, which assigns a canonical
-    // world numbering; every state the search stores has been through it.
+    // These compare the *labelled* structure, set table included. They are
+    // exact up to isomorphism only for states produced by bisim_contract,
+    // which numbers worlds and sets canonically; every state the search stores
+    // has been through it.
     [[nodiscard]] Fingerprint fingerprint() const;
     [[nodiscard]] std::size_t hash() const;
     [[nodiscard]] bool operator==(const EpistemicState& o) const noexcept;
@@ -137,32 +159,45 @@ struct EpistemicState {
 
     // Bytes of model storage, excluding derived caches.
     [[nodiscard]] std::size_t footprint() const noexcept {
-        return (valuation.size() + relation.size() + designated.size()) * sizeof(bits::Word);
+        return (valuation.size() + designated.size()) * sizeof(bits::Word) +
+               (set_of.size() + set_begin.size()) * sizeof(std::uint32_t) +
+               members.size() * sizeof(WorldIdx);
     }
 
 private:
-    [[nodiscard]] std::size_t row_offset(AgentIdx ag, WorldIdx w) const noexcept {
-        return (std::size_t(ag) * num_worlds + w) * rel_words;
-    }
-
     mutable std::unique_ptr<SatCache>  cache_;
     mutable std::optional<Fingerprint> fp_;
 };
 
-// Row-deduplicated copy of a state, for states that wait in a search queue.
-// Accessibility rows repeat heavily (about one distinct row per equivalence
-// class per agent), so this is typically tens of times smaller than the bit
-// matrix: 30 distinct rows for 19 210 in an IεPC hard gossip state.
+// Interns successor sets by content while a relation is being built, so that
+// equal sets share one id. Registers the empty set as id 0.
+class SetInterner {
+public:
+    explicit SetInterner(EpistemicState& s);
+
+    [[nodiscard]] std::uint32_t intern(std::span<const WorldIdx> sorted_members);
+
+private:
+    EpistemicState&                                s_;
+    std::unordered_map<std::uint64_t, std::uint32_t> first_;   // content hash → id
+    std::vector<std::uint32_t>                     next_;     // id → next id, same hash
+};
+
+// A state without its caches, for states that wait in a search queue. The set
+// table already stores each distinct successor set once, so this is a plain
+// copy of the arrays.
 struct CompactState {
     std::uint32_t num_worlds{0}, num_atoms{0}, num_agents{0};
-    std::vector<bits::Word>    valuation, designated, rows;
-    std::vector<std::uint32_t> row_of;   // agent · |W| + world → row index
+    std::vector<bits::Word>    valuation, designated;
+    std::vector<std::uint32_t> set_of, set_begin;
+    std::vector<WorldIdx>      members;
 
     [[nodiscard]] static CompactState from(const EpistemicState& s);
     [[nodiscard]] EpistemicState expand() const;
     [[nodiscard]] std::size_t footprint() const noexcept {
-        return (valuation.size() + designated.size() + rows.size()) * sizeof(bits::Word) +
-               row_of.size() * sizeof(std::uint32_t);
+        return (valuation.size() + designated.size()) * sizeof(bits::Word) +
+               (set_of.size() + set_begin.size()) * sizeof(std::uint32_t) +
+               members.size() * sizeof(WorldIdx);
     }
 };
 

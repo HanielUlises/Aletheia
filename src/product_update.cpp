@@ -31,8 +31,11 @@
 // of e, which is what permits hoisting its evaluation out of the pair loop.
 //
 // Worlds are numbered in one block per event, idx(w,e) = off(e) + rank of w in
-// sat(pre(e)), so a row of R'_i is an OR of PEXT(R_i(w), sat(pre(f))) shifted to
-// off(f). bisim_contract renumbers canonically afterwards.
+// sat(pre(e)). The successor set of (w,e) depends only on the set R_i(w) and on
+// the event row R^E_i(e), so it is built once per distinct (set, row) pair:
+// walking f ∈ R^E_i(e) in order and v ∈ R_i(w) in order visits idx(v,f) in
+// increasing order, which leaves the set sorted without a sort.
+// bisim_contract renumbers canonically afterwards.
 
 namespace {
 
@@ -51,8 +54,11 @@ struct Scratch {
 
     std::vector<const ObsCase*> obs_choice;  // [ag]  observability for this state
 
-    std::vector<bits::Word>    packed;       // [f · rel_words]  PEXT(row, pre(f))
-    std::vector<std::uint32_t> packed_bits;  // [f]
+    std::vector<EventIdx>      row_rep;      // [e]  first event with e's row
+    std::vector<std::uint32_t> memo_id;      // [set · e]  built successor set
+    std::vector<std::uint32_t> memo_stamp;
+    std::uint32_t              memo_token{0};
+    std::vector<WorldIdx>      buf;
 
     [[nodiscard]] bits::ConstWordSpan pre_of(EventIdx e) const noexcept
         { return {pre.data() + std::size_t(e) * rel_words, rel_words}; }
@@ -131,12 +137,18 @@ std::vector<bits::Word> serial_core(const EpistemicState& s) {
     std::vector<bits::Word> alive(s.rel_words, 0);
     bits::fill_all(alive, s.num_worlds);
 
+    std::vector<std::uint8_t> nonempty(s.num_sets());
     for (bool changed = true; changed;) {
         changed = false;
+        for (std::uint32_t id = 0; id < s.num_sets(); ++id) {
+            const auto m = s.set(id);
+            nonempty[id] = std::any_of(m.begin(), m.end(),
+                                       [&](WorldIdx v) { return bits::test(alive, v); });
+        }
         for (WorldIdx w = 0; w < s.num_worlds; ++w) {
             if (!bits::test(alive, w)) continue;
             for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
-                if (!bits::intersects(s.succ(ag, w), alive)) {
+                if (!nonempty[s.succ_set(ag, w)]) {
                     bits::reset(alive, w);
                     changed = true;
                     break;
@@ -219,50 +231,50 @@ product_update_with_map(const EpistemicState& s, const Action& a,
 
     // R'_i.
     //
-    //   R'_i((w,e)) = ⋃_{f ∈ R^E_i(e)}  off(f) + PEXT(R_i(w), sat(pre(f)))
-    //
-    // Packed rows depend on (i, w) only; an event row equal to the previous
-    // one reuses the previous product row.
-    const std::uint32_t ew = static_cast<std::uint32_t>(bits::words_for(ne));
-    p.packed.resize(std::size_t(ne) * rw);
-    p.packed_bits.resize(ne);
+    //   R'_i((w,e)) = { idx(v,f) | v ∈ R_i(w), f ∈ R^E_i(e), (v,f) ∈ W' }
+    const std::uint32_t ns = s.num_sets();
+    if (p.memo_stamp.size() < std::size_t(ns) * ne) {
+        p.memo_stamp.assign(std::size_t(ns) * ne, 0);
+        p.memo_id.resize(std::size_t(ns) * ne);
+        p.memo_token = 0;
+    }
+    p.row_rep.resize(ne);
 
     for (AgentIdx ag = 0; ag < na; ++ag) {
         const ObsCase* oc = p.obs_choice[ag];
-        assert(oc->relation_words == ew);   // ObsCase::finalize ran
+        assert(oc->relation_words == bits::words_for(ne));   // ObsCase::finalize ran
+
+        for (EventIdx e = 0; e < ne; ++e) {
+            p.row_rep[e] = e;
+            for (EventIdx d = 0; d < e; ++d)
+                if (bits::equal(oc->event_row(d), oc->event_row(e))) { p.row_rep[e] = d; break; }
+        }
+        if (++p.memo_token == 0) {
+            std::fill(p.memo_stamp.begin(), p.memo_stamp.end(), 0);
+            p.memo_token = 1;
+        }
 
         for (WorldIdx w = 0; w < nw; ++w) {
-            const auto world_row = s.succ(ag, w);
-            if (bits::empty(world_row)) continue;
-
-            for (EventIdx f = 0; f < ne; ++f)
-                p.packed_bits[f] = static_cast<std::uint32_t>(bits::extract(
-                    world_row, p.pre_of(f),
-                    bits::WordSpan{p.packed.data() + std::size_t(f) * rw, rw}));
-
-            bits::ConstWordSpan prev_events{};
-            WorldIdx            prev_row = kNoWorld;
-
+            const std::uint32_t src = s.succ_set(ag, w);
             for (EventIdx e = 0; e < ne; ++e) {
                 const WorldIdx new_w = out.pair_to_idx[std::size_t(w) * ne + e];
                 if (new_w == kNoWorld) continue;
 
-                const bits::ConstWordSpan events = oc->event_row(e);
-
-                auto dst = result.succ(ag, new_w);
-                if (prev_row != kNoWorld && bits::equal(events, prev_events)) {
-                    bits::copy_from(dst, result.succ(ag, prev_row));
-                    continue;
+                const std::size_t key = std::size_t(src) * ne + p.row_rep[e];
+                if (p.memo_stamp[key] != p.memo_token) {
+                    p.memo_stamp[key] = p.memo_token;
+                    p.buf.clear();
+                    const auto succ = s.set(src);
+                    bits::for_each(oc->event_row(e), [&](std::uint32_t f) {
+                        if (f >= ne) return;
+                        for (WorldIdx v : succ) {
+                            const WorldIdx idx = out.pair_to_idx[std::size_t(v) * ne + f];
+                            if (idx != kNoWorld) p.buf.push_back(idx);
+                        }
+                    });
+                    p.memo_id[key] = p.buf.empty() ? 0 : result.add_set(p.buf);
                 }
-
-                bits::for_each(events, [&](std::uint32_t f) {
-                    if (p.packed_bits[f] == 0) return;
-                    bits::or_shifted(dst, p.offset[f],
-                                     bits::ConstWordSpan{p.packed.data() + std::size_t(f) * rw, rw},
-                                     p.packed_bits[f]);
-                });
-                prev_events = events;
-                prev_row    = new_w;
+                result.set_of[std::size_t(ag) * nw_out + new_w] = p.memo_id[key];
             }
         }
     }
