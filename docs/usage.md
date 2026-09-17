@@ -71,6 +71,42 @@ a silent fallback.
 - `./run_benchmarks.sh` — sweeps a task set across several heuristics into
   `results/`.
 
+## Grounding large tasks
+
+`plank export` writes every accessibility edge of the initial state and builds
+the whole document in memory first. On IεPC `gos-13-all` (8 192 worlds, 13
+agents) that runs past 31 GB before anything is written. `tools/ground` grounds
+with plank's libraries and writes the same JSON, except that each agent's
+relation is a table of distinct successor sets:
+
+```json
+"relations": {
+  "A": { "sets": [["w0", "w2"], ["w1", "w3"]],
+         "of":   [0, 1, 0, 1] }
+}
+```
+
+`"of"` gives, for every world in the order of `"worlds"`, the index of its set;
+set members may be world names or indices. The planner reads both this form and
+plank's, agent by agent. On S5 and KD45 models the sets of one agent are
+disjoint, so the relation is linear in the number of worlds: `gos-13-all`
+grounds in about a minute to a 2.5 MB file, which the planner solves in seconds.
+The initial state is also marked with `"relations-format": "successor-sets"` in
+`"planning-task-info"`.
+
+Build against a built plank checkout (the tool links its `epddl_lib` and
+`del_lib` and needs Boost headers):
+
+```sh
+cmake -S tools/ground -B build-ground -DPLANK_DIR=/path/to/plank
+cmake --build build-ground -j"$(nproc)"
+build-ground/ground -d domain.epddl -p problem.epddl -l library.epddl -o task.json
+```
+
+`ground export -d … -p … -l … -o <dir>` takes the arguments of `plank export`
+and, like it, writes `<dir>/<problem>.json`, so it can stand in for plank in
+scripts that call the exporter.
+
 ## Selection policy
 
 With neither `--heuristic` nor `--strategy` given, the planner picks both from
