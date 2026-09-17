@@ -49,13 +49,10 @@ struct Scratch {
     std::vector<std::uint32_t> post_begin;   // [e + 1] → range into posts
     std::vector<bits::Word>    post_ext;     // [k · rel_words]
 
-    std::vector<bits::Word>    obs_ext;      // [c · rel_words]  one per case
-    std::vector<bits::Word>    obs_claimed;  // worlds matched by an earlier case
-    std::vector<std::int32_t>  obs_case;     // [ag · |W|]  first matching case, or -1
+    std::vector<const ObsCase*> obs_choice;  // [ag]  observability for this state
 
     std::vector<bits::Word>    packed;       // [f · rel_words]  PEXT(row, pre(f))
     std::vector<std::uint32_t> packed_bits;  // [f]
-    std::vector<bits::Word>    all_events;   // row with every event set
 
     [[nodiscard]] bits::ConstWordSpan pre_of(EventIdx e) const noexcept
         { return {pre.data() + std::size_t(e) * rel_words, rel_words}; }
@@ -105,32 +102,18 @@ void precompute(const EpistemicState& s, const Action& a, Scratch& p) {
     }
     p.post_begin[ne] = static_cast<std::uint32_t>(p.posts.size());
 
-    // First matching observability case per world.
-    p.obs_case.assign(std::size_t(na) * nw, -1);
-    for (AgentIdx ag = 0; ag < na && ag < a.obs_cases.size(); ++ag) {
-        const auto& cases = a.obs_cases[ag];
-        if (cases.empty()) continue;
-
-        p.obs_ext.resize(cases.size() * rw);
-        for (std::size_t c = 0; c < cases.size(); ++c) {
-            const auto ext = s.sat(*cases[c].condition);
-            std::copy(ext.begin(), ext.end(), p.obs_ext.begin() + c * rw);
-        }
-
-        auto& claimed = p.obs_claimed;
-        claimed.assign(rw, 0);
-        for (std::size_t c = 0; c < cases.size(); ++c) {
-            for (std::uint32_t i = 0; i < rw; ++i) {
-                bits::Word fresh = p.obs_ext[c * rw + i] & ~claimed[i];
-                claimed[i] |= fresh;
-                while (fresh) {
-                    const WorldIdx w = static_cast<WorldIdx>(i * bits::kWordBits +
-                                                             std::countr_zero(fresh));
-                    p.obs_case[std::size_t(ag) * nw + w] = static_cast<std::int32_t>(c);
-                    fresh &= fresh - 1;
-                }
+    // Observability is decided per agent for the whole state, as in plank: the
+    // first case whose condition holds at every designated world, else the
+    // action's first declared type.
+    p.obs_choice.assign(na, nullptr);
+    for (AgentIdx ag = 0; ag < na; ++ag) {
+        p.obs_choice[ag] = &a.default_obs;
+        if (ag >= a.obs_cases.size()) continue;
+        for (const ObsCase& c : a.obs_cases[ag])
+            if (bits::subset_of(s.designated_bits(), s.sat(*c.condition))) {
+                p.obs_choice[ag] = &c;
+                break;
             }
-        }
     }
 }
 
@@ -243,12 +226,10 @@ product_update_with_map(const EpistemicState& s, const Action& a,
     const std::uint32_t ew = static_cast<std::uint32_t>(bits::words_for(ne));
     p.packed.resize(std::size_t(ne) * rw);
     p.packed_bits.resize(ne);
-    p.all_events.assign(ew, 0);
-    bits::fill_all(p.all_events, ne);
 
     for (AgentIdx ag = 0; ag < na; ++ag) {
-        const auto* agent_cases =
-            (ag < a.obs_cases.size()) ? &a.obs_cases[ag] : nullptr;
+        const ObsCase* oc = p.obs_choice[ag];
+        assert(oc->relation_words == ew);   // ObsCase::finalize ran
 
         for (WorldIdx w = 0; w < nw; ++w) {
             const auto world_row = s.succ(ag, w);
@@ -259,9 +240,6 @@ product_update_with_map(const EpistemicState& s, const Action& a,
                     world_row, p.pre_of(f),
                     bits::WordSpan{p.packed.data() + std::size_t(f) * rw, rw}));
 
-            const std::int32_t ci = p.obs_case[std::size_t(ag) * nw + w];
-            const ObsCase* oc = (ci >= 0 && agent_cases) ? &(*agent_cases)[ci] : nullptr;
-
             bits::ConstWordSpan prev_events{};
             WorldIdx            prev_row = kNoWorld;
 
@@ -269,10 +247,7 @@ product_update_with_map(const EpistemicState& s, const Action& a,
                 const WorldIdx new_w = out.pair_to_idx[std::size_t(w) * ne + e];
                 if (new_w == kNoWorld) continue;
 
-                // No matching case: fully observant, R^E_i(e) = E.
-                assert(!oc || oc->relation_words == ew);   // ObsCase::finalize ran
-                const bits::ConstWordSpan events =
-                    oc ? oc->event_row(e) : bits::ConstWordSpan{p.all_events};
+                const bits::ConstWordSpan events = oc->event_row(e);
 
                 auto dst = result.succ(ag, new_w);
                 if (prev_row != kNoWorld && bits::equal(events, prev_events)) {

@@ -209,7 +209,7 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
         const auto obs_of = [&](AgentIdx j, EventIdx e) {
             std::vector<std::pair<std::uint32_t, std::vector<EventIdx>>> out;
             if (j >= a.obs_cases.size() || a.obs_cases[j].empty())
-                out.emplace_back(node(Kind::True, {}), events_in(all_events));
+                out.emplace_back(node(Kind::True, {}), events_in(a.default_obs.event_row(e)));
             else
                 for (const ObsCase& c : a.obs_cases[j])
                     out.emplace_back(compile(c.condition, false), events_in(c.event_row(e)));

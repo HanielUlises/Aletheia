@@ -56,6 +56,9 @@ public:
     // Object members, sorted by key.
     [[nodiscard]] std::vector<std::pair<std::string_view, Value>> items() const;
 
+    // Object members in document order.
+    [[nodiscard]] std::vector<std::pair<std::string_view, Value>> members() const;
+
     class iterator {
     public:
         iterator(const Document* d, std::uint32_t i) noexcept : d_(d), i_(i) {}

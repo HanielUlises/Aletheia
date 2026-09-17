@@ -449,8 +449,10 @@ PlanningTask load_task(const std::string& json_path) {
         std::unordered_map<std::string,
             std::vector<std::unordered_set<EventIdx>>> obs_type_rel;
 
+        std::string first_obs_type;
         if (a_j.contains("relations")) {
-            for (auto& [obs_type, rel_j] : a_j.at("relations").items()) {
+            for (auto& [obs_type, rel_j] : a_j.at("relations").members()) {
+                if (first_obs_type.empty()) first_obs_type = std::string(obs_type);
                 std::vector<std::unordered_set<EventIdx>> rel(ne);
 
                 for (auto& [src_ename, targets] : rel_j.items()) {
@@ -479,7 +481,8 @@ PlanningTask load_task(const std::string& json_path) {
 
                 AgentIdx ag = ait->second;
 
-                for (auto& [obs_type, cond_j] : obs_j.items()) {
+                // Document order: plank takes the first condition that holds.
+                for (auto& [obs_type, cond_j] : obs_j.members()) {
                     auto rit = obs_type_rel.find(std::string(obs_type));
                     if (rit == obs_type_rel.end()) continue;
 
@@ -491,6 +494,17 @@ PlanningTask load_task(const std::string& json_path) {
                 }
             }
         }
+
+        if (auto rit = obs_type_rel.find(first_obs_type); rit != obs_type_rel.end()) {
+            act.default_obs.condition = Formula::make_top();
+            act.default_obs.relation  = rit->second;
+        } else {
+            act.default_obs.condition = Formula::make_top();
+            act.default_obs.relation.assign(ne, {});
+            for (EventIdx e = 0; e < ne; ++e)
+                for (EventIdx f = 0; f < ne; ++f) act.default_obs.relation[e].insert(f);
+        }
+        act.default_obs.finalize(ne);
 
         task.action_index[act.name] =
             static_cast<ActionIdx>(task.actions.size());
