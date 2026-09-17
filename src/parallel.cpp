@@ -26,7 +26,10 @@ public:
         for (auto& t : workers_) t.join();
     }
 
-    void run(std::size_t n, void* ctx, void (*fn)(void*, std::size_t)) {
+    // False if another thread is running a loop; the caller then runs serially.
+    bool try_run(std::size_t n, void* ctx, void (*fn)(void*, std::size_t)) {
+        std::unique_lock owner(owner_, std::try_to_lock);
+        if (!owner) return false;
         {
             std::lock_guard lk(m_);
             n_ = n; ctx_ = ctx; fn_ = fn;
@@ -38,6 +41,7 @@ public:
         drain();
         std::unique_lock lk(m_);
         done_.wait(lk, [this] { return busy_ == 0; });
+        return true;
     }
 
 private:
@@ -67,6 +71,7 @@ private:
     }
 
     std::vector<std::thread> workers_;
+    std::mutex               owner_;   // one loop at a time
     std::mutex               m_;
     std::condition_variable  wake_, done_;
     std::atomic<std::size_t> next_{0};
@@ -79,6 +84,7 @@ private:
 
 unsigned              g_threads = 0;
 std::unique_ptr<Pool> g_pool;
+std::mutex            g_pool_init;
 
 } // namespace
 
@@ -98,8 +104,12 @@ void run(std::size_t n, void* ctx, void (*fn)(void*, std::size_t)) {
         for (std::size_t i = 0; i < n; ++i) fn(ctx, i);
         return;
     }
-    if (!g_pool) g_pool = std::make_unique<Pool>(threads());
-    g_pool->run(n, ctx, fn);
+    {
+        std::lock_guard lk(g_pool_init);
+        if (!g_pool) g_pool = std::make_unique<Pool>(threads());
+    }
+    if (!g_pool->try_run(n, ctx, fn))
+        for (std::size_t i = 0; i < n; ++i) fn(ctx, i);
 }
 
 } // namespace par

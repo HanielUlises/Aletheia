@@ -3,6 +3,7 @@
 #include "outcome.hpp"
 #include "task.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -76,6 +77,11 @@ struct SearchResult {
 };
 
 using Deadline = std::chrono::steady_clock::time_point;
+
+// Cooperative cancellation: a thread may install a flag that makes every
+// deadline check of the searches it runs report expiry.
+void set_cancel_flag(const std::atomic<bool>* flag) noexcept;
+[[nodiscard]] bool expired(Deadline d) noexcept;
 
 namespace gbfs {
 

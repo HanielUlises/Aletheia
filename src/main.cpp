@@ -5,6 +5,7 @@
 #include "selection_policy.hpp"
 #include "knowledge_relaxation.hpp"
 #include "parallel.hpp"
+#include "portfolio.hpp"
 #include "symmetry.hpp"
 
 #include <iostream>
@@ -61,7 +62,7 @@ static void write_linear_plan(std::ostream& out,
     out << "]\n";
 }
 
-enum class Strategy { GBFS, EHC, AOSTAR, REPLAN };
+enum class Strategy { GBFS, EHC, AOSTAR, REPLAN, PORTFOLIO };
 
 static bool has_sensing_actions(const PlanningTask& task) {
     for (auto& action : task.actions)
@@ -100,6 +101,7 @@ static std::optional<Strategy> parse_strategy(const std::string& label) {
     if (label == "ehc")    return Strategy::EHC;
     if (label == "aostar") return Strategy::AOSTAR;
     if (label == "replan") return Strategy::REPLAN;
+    if (label == "portfolio") return Strategy::PORTFOLIO;
     return std::nullopt;
 }
 
@@ -107,6 +109,7 @@ static const char* strategy_name(Strategy s) {
     switch (s) {
         case Strategy::AOSTAR: return "AO*";
         case Strategy::REPLAN: return "replan";
+        case Strategy::PORTFOLIO: return "portfolio";
         case Strategy::EHC:    return "EHC";
         default:               return "GBFS";
     }
@@ -122,7 +125,7 @@ static void usage(const char* prog) {
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
         << "  --heuristic    ug | ed | ks | wc | rpg | radd | kadd  (default: auto)\n"
-        << "  --strategy     gbfs | ehc | aostar | replan    (default: auto)\n"
+        << "  --strategy     gbfs | ehc | aostar | replan | portfolio  (default: auto)\n"
         << "  --policy       Selection-policy JSON; overrides the built-in\n"
         << "                 rules used to auto-select strategy and heuristic\n"
         << "  --print-policy Write the effective policy to stdout and exit\n"
@@ -290,6 +293,30 @@ int main(int argc, char* argv[]) {
     if (!out.is_open()) {
         std::cerr << "Error: cannot open output file: " << plan_path << "\n";
         return 1;
+    }
+
+    if (strategy == Strategy::PORTFOLIO) {
+        std::cerr << "[main] Mode: portfolio\n";
+        const Deadline deadline = timeout_secs > 0
+            ? Clock::now() + std::chrono::seconds(timeout_secs) : Deadline::max();
+        const KnowledgeRelaxationHeuristic relaxation(task);
+        const KnowledgeSpreadHeuristic     spread;
+        PortfolioOutcome o = race(task, relaxation, spread, deadline);
+
+        if (o.linear) {
+            write_linear_plan(out, *o.linear);
+            std::cerr << "[main] Plan written to " << plan_path << " (" << o.member << ")\n";
+        } else if (o.contingent) {
+            if (!o.contingent->plan_tree) out << "[]\n";
+            else { write_plan_tree(out, o.contingent->plan_tree); out << "\n"; }
+            std::cerr << "[main] Conditional plan written to " << plan_path << " (" << o.member << ")\n";
+            auto vr = validate(task, o.contingent->plan_tree);
+            std::cerr << (vr.valid ? "[validator] OK\n" : "[validator] FAILED — " + vr.error + "\n");
+        } else {
+            out << "null\n";
+            std::cerr << (o.unsolvable ? "[main] No solution exists.\n" : "[main] No solution found.\n");
+        }
+        return 0;
     }
 
     if (strategy == Strategy::AOSTAR || strategy == Strategy::REPLAN) {

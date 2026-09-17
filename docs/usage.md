@@ -41,7 +41,7 @@ holds `null`. An empty array means the goal already held.
 | `--task <path>` | Grounded JSON task (required) |
 | `--plan <path>` | Output plan file (required) |
 | `--heuristic <label>` | `ug`, `ed`, `ks`, `wc`, `rpg`, `radd`, `kadd`. Default: chosen by policy |
-| `--strategy <label>` | `gbfs`, `ehc`, `aostar`, `replan`. Default: chosen by policy |
+| `--strategy <label>` | `gbfs`, `ehc`, `aostar`, `replan`, `portfolio` (races compatible configurations in parallel). Default: chosen by policy |
 | `--policy <path>` | Selection-policy JSON; replaces the built-in rules |
 | `--print-policy` | Write the effective policy to stdout and exit |
 | `--explain` | Report the task features and which rule decided each auto-selection |

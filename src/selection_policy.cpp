@@ -40,7 +40,7 @@ constexpr std::array<std::string_view, 13> kFeatureNames{
     "goal_unsat_init",
 };
 
-constexpr std::array<std::string_view, 4> kStrategyLabels{"gbfs", "ehc", "aostar", "replan"};
+constexpr std::array<std::string_view, 5> kStrategyLabels{"gbfs", "ehc", "aostar", "replan", "portfolio"};
 
 constexpr std::array<std::string_view, 7> kHeuristicLabels{
     "ug", "ed", "ks", "wc", "rpg", "radd", "kadd"};

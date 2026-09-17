@@ -28,6 +28,7 @@ set(SOURCES
     src/selection_policy.cpp
     src/search.cpp
     src/replan.cpp
+    src/portfolio.cpp
     src/symmetry.cpp
     src/parallel.cpp
     src/validator.cpp
