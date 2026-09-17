@@ -53,6 +53,7 @@ holds `null`. An empty array means the goal already held.
 | `--kd45-repair` | Delete non-serial worlds after KD45 updates. Off by default, matching plank |
 | `--no-portfolio` | Auto-selected AO\* on sensing tasks keeps the whole budget instead of handing over to replan |
 | `--no-helpful` | GBFS expands every action instead of the relaxed plan's helpful actions first |
+| `--signature` | Print the task's structural signature (topology, fixed-point depths, growth, symmetry) as JSON and exit |
 | `--help` | Show usage |
 
 An unknown heuristic or strategy label is an error listing the valid ones, not

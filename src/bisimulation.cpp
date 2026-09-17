@@ -77,6 +77,8 @@ Scratch& scratch() {
     return sc;
 }
 
+thread_local std::uint32_t t_rounds = 0;
+
 // Drops worlds unreachable from W*. Word-parallel BFS; returns `s` without
 // copying when every world is reachable.
 EpistemicState restrict_to_reachable(EpistemicState s) {
@@ -225,7 +227,9 @@ EpistemicState bisim_contract(EpistemicState s) {
 
     std::int32_t num_classes = *std::max_element(class_of.begin(), class_of.end()) + 1;
 
+    t_rounds = 0;
     for (;;) {
+        ++t_rounds;
         for (WorldIdx w = 0; w < nw; ++w)
             keys[std::size_t(w) * key_width] = class_of[w];
 
@@ -339,3 +343,5 @@ EpistemicState bisim_contract(EpistemicState s) {
     out.invalidate();
     return out;
 }
+
+std::uint32_t last_refinement_rounds() noexcept { return t_rounds; }

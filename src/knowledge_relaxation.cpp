@@ -355,7 +355,7 @@ void KnowledgeRelaxationHeuristic::prune() {
         if (!fact_needed[f]) { facts_[f] = nullptr; derived_[f] = -1; }
 }
 
-void KnowledgeRelaxationHeuristic::costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
+std::uint32_t KnowledgeRelaxationHeuristic::costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
                                          std::vector<std::int32_t>& rc,
                                          std::vector<std::int32_t>* supporter) const {
     fc.assign(facts_.size(), kInf);
@@ -392,7 +392,8 @@ void KnowledgeRelaxationHeuristic::costs(const EpistemicState& s, std::vector<st
 
     // Children precede parents in reqs_, so one ordered pass per round is exact
     // for the current fact costs; rounds propagate operator effects.
-    for (int round = 0; round < 1024; ++round) {
+    std::uint32_t rounds = 0;
+    for (int round = 0; round < 1024; ++round, ++rounds) {
         eval();
         bool changed = false;
         for (std::size_t o = 0; o < ops_.size(); ++o) {
@@ -415,6 +416,44 @@ void KnowledgeRelaxationHeuristic::costs(const EpistemicState& s, std::vector<st
         if (!changed) break;
     }
     if (supporter) eval();
+    return rounds;
+}
+
+KnowledgeRelaxationHeuristic::Analysis
+KnowledgeRelaxationHeuristic::analyse(const EpistemicState& s) const {
+    std::vector<std::int32_t> fc, rc, sup;
+    Analysis a;
+    a.rounds = costs(s, fc, rc, &sup);
+    for (std::uint32_t r : goal_) {
+        if (rc[r] >= kInf) ++a.dead_goals;
+        else a.depth = std::max<std::uint32_t>(a.depth, static_cast<std::uint32_t>(rc[r]));
+    }
+    // Operators of the relaxed plan: backchain from the goal as in preferred().
+    std::vector<char> used(ops_.size(), 0), seen_req(reqs_.size(), 0), seen_fact(facts_.size(), 0);
+    std::vector<std::uint32_t> stack(goal_.begin(), goal_.end());
+    while (!stack.empty()) {
+        const std::uint32_t r = stack.back();
+        stack.pop_back();
+        if (seen_req[r] || rc[r] == 0 || rc[r] >= kInf) continue;
+        seen_req[r] = 1;
+        const Req& q = reqs_[r];
+        if (q.kind == Kind::And) {
+            for (std::uint32_t i = q.begin; i < q.end; ++i) stack.push_back(req_children_[i]);
+        } else if (q.kind == Kind::Or) {
+            std::uint32_t best = req_children_[q.begin];
+            for (std::uint32_t i = q.begin; i < q.end; ++i)
+                if (rc[req_children_[i]] < rc[best]) best = req_children_[i];
+            stack.push_back(best);
+        } else if (q.kind == Kind::Fact && !seen_fact[q.fact]) {
+            seen_fact[q.fact] = 1;
+            if (sup[q.fact] >= 0) { used[sup[q.fact]] = 1; stack.push_back(ops_[sup[q.fact]].pre); }
+            else if (derived_[q.fact] >= 0) stack.push_back(static_cast<std::uint32_t>(derived_[q.fact]));
+        }
+    }
+    for (char u : used) a.relaxed_plan += u;
+    for (const auto& f : facts_) a.facts += f != nullptr;
+    a.operators = static_cast<std::uint32_t>(ops_.size());
+    return a;
 }
 
 float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,

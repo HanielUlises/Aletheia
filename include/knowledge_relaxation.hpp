@@ -29,6 +29,15 @@ public:
 
     float operator()(const EpistemicState& s, const PlanningTask& task) const override;
 
+    struct Analysis {
+        std::uint32_t rounds{0};          // fixpoint rounds
+        std::uint32_t depth{0};           // largest finite goal-conjunct cost
+        std::uint32_t dead_goals{0};      // goal conjuncts unreachable in the relaxation
+        std::uint32_t relaxed_plan{0};    // operators in the extracted relaxed plan
+        std::uint32_t facts{0}, operators{0};
+    };
+    [[nodiscard]] Analysis analyse(const EpistemicState& s) const;
+
     // Applicable actions of a relaxed plan extracted from the cost fixpoint.
     bool preferred(const EpistemicState& s, const PlanningTask& task,
                    std::vector<ActionIdx>& out) const override;
@@ -55,7 +64,7 @@ private:
     void          prune();
     // Cost fixpoint at s; supporter[f] is the operator giving fact f its cost,
     // or -1 when initial or derived.
-    void          costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
+    std::uint32_t costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
                         std::vector<std::int32_t>& rc, std::vector<std::int32_t>* supporter) const;
 
     ActionIdx     current_action_{0};
