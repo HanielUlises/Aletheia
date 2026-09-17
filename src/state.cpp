@@ -1,5 +1,7 @@
 #include "state.hpp"
 
+#include <unordered_map>
+
 #include <algorithm>
 #include <cassert>
 #include <iostream>
@@ -326,6 +328,52 @@ bool EpistemicState::operator==(const EpistemicState& o) const noexcept {
 }
 
 // Restriction.
+
+CompactState CompactState::from(const EpistemicState& s) {
+    CompactState c;
+    c.num_worlds = s.num_worlds;
+    c.num_atoms  = s.num_atoms;
+    c.num_agents = s.num_agents;
+    c.valuation  = s.valuation;
+    c.designated = s.designated;
+    c.row_of.resize(std::size_t(s.num_agents) * s.num_worlds);
+
+    const std::uint32_t rw = s.rel_words;
+    std::unordered_map<bits::Word, std::vector<std::uint32_t>> index;
+    for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
+        for (WorldIdx w = 0; w < s.num_worlds; ++w) {
+            const auto row = s.succ(ag, w);
+            bits::Word h = 0;
+            for (bits::Word x : row) h = bits::mix64(h ^ x);
+            auto& cands = index[h];
+            std::uint32_t id = UINT32_MAX;
+            for (std::uint32_t k : cands)
+                if (std::equal(row.begin(), row.end(), c.rows.begin() + std::size_t(k) * rw)) { id = k; break; }
+            if (id == UINT32_MAX) {
+                id = static_cast<std::uint32_t>(c.rows.size() / (rw ? rw : 1));
+                c.rows.insert(c.rows.end(), row.begin(), row.end());
+                cands.push_back(id);
+            }
+            c.row_of[std::size_t(ag) * s.num_worlds + w] = id;
+        }
+    }
+    return c;
+}
+
+EpistemicState CompactState::expand() const {
+    EpistemicState s;
+    s.allocate(num_worlds, num_atoms, num_agents);
+    s.valuation  = valuation;
+    s.designated = designated;
+    const std::uint32_t rw = s.rel_words;
+    for (AgentIdx ag = 0; ag < num_agents; ++ag)
+        for (WorldIdx w = 0; w < num_worlds; ++w) {
+            const std::size_t k = row_of[std::size_t(ag) * num_worlds + w];
+            std::copy_n(rows.begin() + k * rw, rw, s.succ(ag, w).begin());
+        }
+    s.invalidate();
+    return s;
+}
 
 EpistemicState restrict_state(const EpistemicState& s,
                               bits::ConstWordSpan keep,

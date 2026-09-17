@@ -56,7 +56,7 @@ static void replay(const EpistemicState& s,
 
     // Split product update — one branch per designated event. Uses the task's
     // frame and no world cap: validity must not depend on search limits.
-    auto branches = product_update_split(s, *action, task.kd45, make_world_cap_policy(true));
+    auto branches = product_update_split(s, *action, task.repair_seriality(), make_world_cap_policy(true));
     if (branches.empty()) {
         result.valid = false;
         result.error = "product_update_split returned empty for: " + node->action;

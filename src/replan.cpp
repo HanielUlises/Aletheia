@@ -64,7 +64,7 @@ struct Result {
 
 std::vector<std::pair<EventIdx, EpistemicState>>
 outcomes(const EpistemicState& s, const Action& a, Context& c) {
-    auto branches = product_update_split(s, a, c.task.kd45, c.cap);
+    auto branches = product_update_split(s, a, c.task.repair_seriality(), c.cap);
     for (auto& [e, b] : branches) b = bisim_contract(std::move(b));
     c.stats.nodes_generated += branches.size();
     return branches;
@@ -83,7 +83,7 @@ std::optional<std::vector<Step>>
 find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local_ban,
           Context& c, bool& hit_stack) {
     struct Node {
-        EpistemicState state;    // released once expanded
+        CompactState   state;    // released once expanded
         Fingerprint    fp;
         std::uint32_t  parent;
         ActionIdx      action;
@@ -102,7 +102,7 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
     FingerprintSet     closed;
 
     const Fingerprint root_fp = root.fingerprint();
-    nodes.push_back({root, root_fp, UINT32_MAX, 0});
+    nodes.push_back({CompactState::from(root), root_fp, UINT32_MAX, 0});
     closed.insert(root_fp);
     open.push_back({c.h(root, c.task), 0, 0});
 
@@ -122,7 +122,8 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
         open.pop_back();
         c.stats.nodes_expanded++;
 
-        const EpistemicState s  = std::move(nodes[cur.idx].state);
+        const EpistemicState s  = nodes[cur.idx].state.expand();
+        nodes[cur.idx].state    = CompactState{};
         const Fingerprint    fp = nodes[cur.idx].fp;
         const StateSymmetry stab = c.task.symmetry ? stabiliser(*c.task.symmetry, s)
                                                    : StateSymmetry{};
@@ -140,15 +141,15 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
                 if (c.stack.count(nfp)) { hit_stack = true; continue; }
 
                 const std::uint32_t g = cur.g + 1;
-                nodes.push_back({std::move(next), nfp, cur.idx, ai});
+                const bool done = next.satisfies(*c.task.goal) || c.solved.count(nfp);
+                const float hv  = done ? 0.f : c.h(next, c.task);
+                nodes.push_back({done ? CompactState{} : CompactState::from(next), nfp, cur.idx, ai});
                 const auto idx = static_cast<std::uint32_t>(nodes.size() - 1);
 
-                if (nodes[idx].state.satisfies(*c.task.goal) || c.solved.count(nfp))
-                    return path_to(idx);
+                if (done) return path_to(idx);
 
                 c.stats.heuristic_calls++;
-                open.push_back({c.h(nodes[idx].state, c.task), g, idx});
-                nodes[idx].state.drop_cache();
+                open.push_back({hv, g, idx});
                 std::push_heap(open.begin(), open.end());
             }
         }

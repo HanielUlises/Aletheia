@@ -101,15 +101,30 @@ FormulaPtr Formula::make_atom(AtomIdx a) {
     return intern(FormulaKind::Atom, a, 0, {}, {});
 }
 
+// Boolean constants are folded on construction: grounders emit effects such as
+// true ∨ (p ∧ ¬false), and folding lets them be recognised as unconditional.
+
 FormulaPtr Formula::make_not(FormulaPtr child) {
+    if (child->kind == FormulaKind::Top) return make_bot();
+    if (child->kind == FormulaKind::Bot) return make_top();
     return intern(FormulaKind::Not, 0, 0, {}, {std::move(child)});
 }
 
 FormulaPtr Formula::make_and(std::vector<FormulaPtr> fs) {
+    std::erase_if(fs, [](const FormulaPtr& f) { return f->kind == FormulaKind::Top; });
+    for (const auto& f : fs)
+        if (f->kind == FormulaKind::Bot) return make_bot();
+    if (fs.empty())     return make_top();
+    if (fs.size() == 1) return fs[0];
     return intern(FormulaKind::And, 0, 0, {}, std::move(fs));
 }
 
 FormulaPtr Formula::make_or(std::vector<FormulaPtr> fs) {
+    std::erase_if(fs, [](const FormulaPtr& f) { return f->kind == FormulaKind::Bot; });
+    for (const auto& f : fs)
+        if (f->kind == FormulaKind::Top) return make_top();
+    if (fs.empty())     return make_bot();
+    if (fs.size() == 1) return fs[0];
     return intern(FormulaKind::Or, 0, 0, {}, std::move(fs));
 }
 

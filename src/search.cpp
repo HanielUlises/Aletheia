@@ -7,6 +7,7 @@
 #include "world_cap_policy.hpp"
 
 #include <algorithm>
+#include <unistd.h>
 #include <chrono>
 #include <climits>
 #include <deque>
@@ -70,6 +71,7 @@ struct Successor {
     float          h{0.f};
     Fingerprint    fp;
     EpistemicState state;
+    CompactState   compact;        // what the queue stores
 };
 
 void build_successor(const EpistemicState& parent, const Action& action,
@@ -79,14 +81,32 @@ void build_successor(const EpistemicState& parent, const Action& action,
     if (!action.applicable(parent)) return;
     out.applicable = true;
 
-    auto maybe = product_update(parent, action, task.kd45, cap);
+    auto maybe = product_update(parent, action, task.repair_seriality(), cap);
     if (!maybe) { out.pruned = maybe.error(); return; }
 
     out.state = bisim_contract(std::move(*maybe));
     out.fp    = out.state.fingerprint();
     out.goal  = out.state.satisfies(*task.goal);
-    if (!out.goal && !closed.contains(out.fp)) out.h = h(out.state, task);
-    out.state.drop_cache();
+    if (!out.goal && !closed.contains(out.fp)) {
+        out.h       = h(out.state, task);
+        out.compact = CompactState::from(out.state);
+    }
+    out.state = EpistemicState{};
+}
+
+// Successors built at once without exceeding half the free memory: a product
+// update materialises up to (|W|·|E|)² bits per agent before contraction.
+std::size_t parallel_batch(const EpistemicState& s, const PlanningTask& task) {
+    static std::size_t max_events = [&] {
+        std::size_t m = 1;
+        for (const Action& a : task.actions) m = std::max(m, a.events.size());
+        return m;
+    }();
+    const double worlds = double(s.num_worlds) * double(max_events);
+    const double bytes  = 2.0 * worlds * worlds / 8.0 * double(std::max<std::uint32_t>(1, s.num_agents));
+    const double avail  = 0.5 * double(sysconf(_SC_AVPHYS_PAGES)) * double(sysconf(_SC_PAGESIZE));
+    const double batch  = bytes > 0 ? avail / bytes : double(par::threads());
+    return std::size_t(std::clamp(batch, 1.0, double(par::threads())));
 }
 
 // Enough work per expansion to cover waking the pool.
@@ -129,7 +149,7 @@ namespace gbfs {
 namespace {
 
 struct Node {
-    EpistemicState state;
+    CompactState   state;          // released once expanded
     std::uint32_t  parent{kNoNode};
     ActionIdx      action{0};
     std::uint32_t  g{0};
@@ -180,7 +200,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
 
     closed.insert(init.fingerprint());
     live_bytes += init.footprint();
-    nodes.push_back(Node{std::move(init), kNoNode, 0, 0});
+    nodes.push_back(Node{CompactState::from(init), kNoNode, 0, 0});
     open.push_back(QEntry{init_h, 0, 0});
 
     while (!open.empty()) {
@@ -209,7 +229,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         const std::uint32_t cur_idx = cur.idx;
         bool generated_successor = false;
 
-        const EpistemicState& parent = nodes[cur_idx].state;
+        const EpistemicState parent = nodes[cur_idx].state.expand();
         const StateSymmetry   stab   = symmetry_of(task, parent);
 
         std::vector<ActionIdx> cands;
@@ -226,24 +246,34 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         const bool parallel = worth_parallel(parent, cands.size());
         if (parallel) {
             warm_extensions(parent, task);
-            par::for_each_index(cands.size(), build);
+            const std::size_t batch = parallel_batch(parent, task);
+            for (std::size_t at = 0; at < cands.size(); at += batch) {
+                if (std::chrono::steady_clock::now() >= deadline) break;
+                par::for_each_index(std::min(batch, cands.size() - at),
+                                    [&](std::size_t i) { build(at + i); });
+            }
         }
 
         for (std::size_t k = 0; k < cands.size(); ++k) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                std::cerr << "[gbfs] Deadline exceeded at "
+                          << result.stats.nodes_expanded << " nodes.\n";
+                result.stats.stop_timer();
+                return std::nullopt;
+            }
             if (!parallel) build(k);
             Successor& sc = succ[k];
             if (!sc.applicable) continue;
             if (sc.pruned != PruneReason::None) { result.stats.record_prune(sc.pruned); continue; }
 
             const ActionIdx ai = cands[k];
-            EpistemicState& next = sc.state;
             generated_successor = true;
             result.stats.nodes_generated++;
 
             const std::uint32_t g = nodes[cur_idx].g + 1;
 
             if (sc.goal) {
-                nodes.push_back(Node{std::move(next), cur_idx, ai, g});
+                nodes.push_back(Node{CompactState{}, cur_idx, ai, g});
                 result.plan = reconstruct(nodes, static_cast<std::uint32_t>(nodes.size() - 1), task);
                 result.stats.final_h    = 0.f;
                 result.stats.closed_size = closed.size();
@@ -276,11 +306,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
                 result.stats.heuristic_stalls++;
             }
 
-            live_bytes += next.footprint();
+            live_bytes += sc.compact.footprint();
             result.stats.peak_state_bytes =
                 std::max(result.stats.peak_state_bytes, live_bytes);
 
-            nodes.push_back(Node{std::move(next), cur_idx, ai, g});
+            nodes.push_back(Node{std::move(sc.compact), cur_idx, ai, g});
             open.push_back(QEntry{hv, g, static_cast<std::uint32_t>(nodes.size() - 1)});
             std::push_heap(open.begin(), open.end(), Worse{});
 
@@ -290,7 +320,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
 
         // Expanded: only the parent link and action are needed from here on.
         live_bytes -= nodes[cur_idx].state.footprint();
-        nodes[cur_idx].state = EpistemicState{};
+        nodes[cur_idx].state = CompactState{};
 
         if (!generated_successor) result.stats.dead_ends++;
     }
@@ -388,7 +418,7 @@ std::vector<Expansion> expand(const EpistemicState& s, Context& ctx) {
         if (!keep(ctx.task, stab, ai, ctx.stats)) continue;
         if (!a.applicable(s)) continue;
 
-        auto branches = product_update_split(s, a, ctx.task.kd45, ctx.cap);
+        auto branches = product_update_split(s, a, ctx.task.repair_seriality(), ctx.cap);
         if (branches.empty()) continue;
 
         Expansion e;
@@ -504,7 +534,7 @@ DfsResult dfs(const EpistemicState& s, std::size_t depth, Context& ctx) {
 
 std::optional<ConditionalSearchResult>
 search(const PlanningTask& task, const Heuristic& h,
-       std::size_t max_depth, Deadline deadline) {
+       std::size_t max_depth, Deadline deadline, bool* exhausted) {
 
     ConditionalSearchResult out;
     out.stats.start_timer();
@@ -556,6 +586,7 @@ search(const PlanningTask& task, const Heuristic& h,
         if (!ctx.truncated) {
             std::cerr << "[aostar] Search space exhausted at depth " << depth
                       << " — no solution exists.\n";
+            if (exhausted) *exhausted = true;
             out.stats.stop_timer();
             return std::nullopt;
         }
@@ -646,7 +677,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             if (!keep(task, stab, ai, result.stats)) continue;
             if (!action.applicable(nodes[cur_idx].state)) continue;
 
-            auto maybe = product_update(nodes[cur_idx].state, action, task.kd45, cap);
+            auto maybe = product_update(nodes[cur_idx].state, action, task.repair_seriality(), cap);
             if (!maybe) { result.stats.record_prune(maybe.error()); continue; }
 
             EpistemicState next = bisim_contract(std::move(*maybe));
@@ -720,7 +751,7 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
                 if (!keep(task, stab, ai, result.stats)) continue;
                 if (!action.applicable(nodes[node_idx].state)) continue;
 
-                auto maybe = product_update(nodes[node_idx].state, action, task.kd45, cap);
+                auto maybe = product_update(nodes[node_idx].state, action, task.repair_seriality(), cap);
                 if (!maybe) { result.stats.record_prune(maybe.error()); continue; }
 
                 EpistemicState next = bisim_contract(std::move(*maybe));

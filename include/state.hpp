@@ -149,6 +149,23 @@ private:
     mutable std::optional<Fingerprint> fp_;
 };
 
+// Row-deduplicated copy of a state, for states that wait in a search queue.
+// Accessibility rows repeat heavily (about one distinct row per equivalence
+// class per agent), so this is typically tens of times smaller than the bit
+// matrix: 30 distinct rows for 19 210 in an IεPC hard gossip state.
+struct CompactState {
+    std::uint32_t num_worlds{0}, num_atoms{0}, num_agents{0};
+    std::vector<bits::Word>    valuation, designated, rows;
+    std::vector<std::uint32_t> row_of;   // agent · |W| + world → row index
+
+    [[nodiscard]] static CompactState from(const EpistemicState& s);
+    [[nodiscard]] EpistemicState expand() const;
+    [[nodiscard]] std::size_t footprint() const noexcept {
+        return (valuation.size() + designated.size() + rows.size()) * sizeof(bits::Word) +
+               row_of.size() * sizeof(std::uint32_t);
+    }
+};
+
 // Restrict a state to `keep`, compacting world indices to 0..|keep|-1.
 //
 // Used by KD45 seriality repair (drop non-serial worlds) and by bisimulation

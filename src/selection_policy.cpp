@@ -367,6 +367,10 @@ SelectionPolicy SelectionPolicy::builtin() {
         // spy-ring linear a8: plan 286 -> 23 steps.
         rule("long-goal", "kadd", {cond("goal_unsat_init", Comparison::Ge, 4)}),
 
+        // Contingent search also needs chained knowledge (IεPC hard
+        // blocks-world bw-4-5-2: replan with kadd 44 s, with ed timeout).
+        rule("sensing-kadd", "kadd", {cond("sensing", Comparison::Eq, 1)}),
+
         // ks counts unresolved worlds per Kw conjunct — the right gradient
         // when every conjunct is Kw-shaped. ed would project through the
         // Belief operators Kw expands into and double-count.

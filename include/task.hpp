@@ -18,6 +18,13 @@ struct PlanningTask {
     // Frame semantics: true = KD45 (belief/doxastic), false = S5 (knowledge).
     bool kd45 = false;
 
+    // Delete non-serial worlds after each KD45 update (belief expansion with
+    // repair). Off by default: plank, the IεPC validator, does not repair, and
+    // repair rejects belief-contradicting events such as deception.
+    bool kd45_repair = false;
+
+    [[nodiscard]] bool repair_seriality() const noexcept { return kd45 && kd45_repair; }
+
     // True iff at least one action has agents with heterogeneous observability
     // (some Fully, some Oblivious or conditional). Set by the parser after all
     // actions are loaded. Gossip, Grapevine, and AMC are the canonical cases.
