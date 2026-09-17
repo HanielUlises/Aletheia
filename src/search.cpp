@@ -7,6 +7,7 @@
 #include "world_cap_policy.hpp"
 
 #include <algorithm>
+#include <unistd.h>
 #include <chrono>
 #include <climits>
 #include <deque>
@@ -91,6 +92,21 @@ void build_successor(const EpistemicState& parent, const Action& action,
         out.compact = CompactState::from(out.state);
     }
     out.state = EpistemicState{};
+}
+
+// Successors built at once without exceeding half the free memory: a product
+// update materialises up to (|W|·|E|)² bits per agent before contraction.
+std::size_t parallel_batch(const EpistemicState& s, const PlanningTask& task) {
+    static std::size_t max_events = [&] {
+        std::size_t m = 1;
+        for (const Action& a : task.actions) m = std::max(m, a.events.size());
+        return m;
+    }();
+    const double worlds = double(s.num_worlds) * double(max_events);
+    const double bytes  = 2.0 * worlds * worlds / 8.0 * double(std::max<std::uint32_t>(1, s.num_agents));
+    const double avail  = 0.5 * double(sysconf(_SC_AVPHYS_PAGES)) * double(sysconf(_SC_PAGESIZE));
+    const double batch  = bytes > 0 ? avail / bytes : double(par::threads());
+    return std::size_t(std::clamp(batch, 1.0, double(par::threads())));
 }
 
 // Enough work per expansion to cover waking the pool.
@@ -230,10 +246,21 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         const bool parallel = worth_parallel(parent, cands.size());
         if (parallel) {
             warm_extensions(parent, task);
-            par::for_each_index(cands.size(), build);
+            const std::size_t batch = parallel_batch(parent, task);
+            for (std::size_t at = 0; at < cands.size(); at += batch) {
+                if (std::chrono::steady_clock::now() >= deadline) break;
+                par::for_each_index(std::min(batch, cands.size() - at),
+                                    [&](std::size_t i) { build(at + i); });
+            }
         }
 
         for (std::size_t k = 0; k < cands.size(); ++k) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                std::cerr << "[gbfs] Deadline exceeded at "
+                          << result.stats.nodes_expanded << " nodes.\n";
+                result.stats.stop_timer();
+                return std::nullopt;
+            }
             if (!parallel) build(k);
             Successor& sc = succ[k];
             if (!sc.applicable) continue;
