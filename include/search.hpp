@@ -118,7 +118,8 @@ namespace aostar {
 // deadline:  wall-clock deadline
 [[nodiscard]] std::optional<ConditionalSearchResult>
 search(const PlanningTask& task, const Heuristic& h,
-       std::size_t max_depth = 0, Deadline deadline = Deadline::max());
+       std::size_t max_depth = 0, Deadline deadline = Deadline::max(),
+       bool* exhausted = nullptr);   // set when unsolvability was proven
 
 } // namespace aostar
 

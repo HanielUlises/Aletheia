@@ -504,7 +504,7 @@ DfsResult dfs(const EpistemicState& s, std::size_t depth, Context& ctx) {
 
 std::optional<ConditionalSearchResult>
 search(const PlanningTask& task, const Heuristic& h,
-       std::size_t max_depth, Deadline deadline) {
+       std::size_t max_depth, Deadline deadline, bool* exhausted) {
 
     ConditionalSearchResult out;
     out.stats.start_timer();
@@ -556,6 +556,7 @@ search(const PlanningTask& task, const Heuristic& h,
         if (!ctx.truncated) {
             std::cerr << "[aostar] Search space exhausted at depth " << depth
                       << " — no solution exists.\n";
+            if (exhausted) *exhausted = true;
             out.stats.stop_timer();
             return std::nullopt;
         }

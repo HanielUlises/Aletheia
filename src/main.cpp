@@ -294,9 +294,25 @@ int main(int argc, char* argv[]) {
 
         auto t_start = Clock::now();
 
+        // Auto-selected AO* on a sensing task runs as a portfolio: a short AO*
+        // pass keeps shallowest plans on easy tasks, then replan takes the
+        // remaining time.
+        const bool portfolio = strategy == Strategy::AOSTAR && !strategy_rule.empty() &&
+                               has_sensing_actions(task);
+        const auto ao_budget = std::chrono::seconds(
+            std::min<std::size_t>(5, timeout_secs > 0 ? std::max<std::size_t>(1, timeout_secs / 10) : 5));
+        bool exhausted = false;
+
         auto result = strategy == Strategy::AOSTAR
-            ? aostar::search(task, *h, limit, deadline)
+            ? aostar::search(task, *h, limit,
+                             portfolio ? std::min(deadline, Clock::now() + ao_budget) : deadline,
+                             &exhausted)
             : replan::search(task, *h, deadline);
+
+        if (!result && portfolio && !exhausted) {
+            std::cerr << "[main] AO* budget spent — switching to replan\n";
+            result = replan::search(task, *h, deadline);
+        }
 
         if (!result) {
             // AO* exhausted its budget. For partial-plan-linear domains
