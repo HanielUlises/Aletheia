@@ -20,6 +20,7 @@ set(SOURCES
     src/state.cpp
     src/action.cpp
     src/parser.cpp
+    src/json.cpp
     src/product_update.cpp
     src/bisimulation.cpp
     src/heuristic.cpp
