@@ -60,7 +60,7 @@ static void write_linear_plan(std::ostream& out,
     out << "]\n";
 }
 
-enum class Strategy { GBFS, EHC, AOSTAR };
+enum class Strategy { GBFS, EHC, AOSTAR, REPLAN };
 
 static bool has_sensing_actions(const PlanningTask& task) {
     for (auto& action : task.actions)
@@ -95,12 +95,14 @@ static std::optional<Strategy> parse_strategy(const std::string& label) {
     if (label == "gbfs")   return Strategy::GBFS;
     if (label == "ehc")    return Strategy::EHC;
     if (label == "aostar") return Strategy::AOSTAR;
+    if (label == "replan") return Strategy::REPLAN;
     return std::nullopt;
 }
 
 static const char* strategy_name(Strategy s) {
     switch (s) {
         case Strategy::AOSTAR: return "AO*";
+        case Strategy::REPLAN: return "replan";
         case Strategy::EHC:    return "EHC";
         default:               return "GBFS";
     }
@@ -116,7 +118,7 @@ static void usage(const char* prog) {
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
         << "  --heuristic    ug | ed | ks | wc | rpg | radd  (default: auto)\n"
-        << "  --strategy     gbfs | ehc | aostar             (default: auto)\n"
+        << "  --strategy     gbfs | ehc | aostar | replan    (default: auto)\n"
         << "  --policy       Selection-policy JSON; overrides the built-in\n"
         << "                 rules used to auto-select strategy and heuristic\n"
         << "  --print-policy Write the effective policy to stdout and exit\n"
@@ -275,8 +277,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (strategy == Strategy::AOSTAR) {
-        std::cerr << "[main] Mode: AO*\n";
+    if (strategy == Strategy::AOSTAR || strategy == Strategy::REPLAN) {
+        std::cerr << "[main] Mode: " << strategy_name(strategy) << "\n";
 
         auto deadline = timeout_secs > 0
             ? Clock::now() + std::chrono::seconds(timeout_secs)
@@ -284,7 +286,9 @@ int main(int argc, char* argv[]) {
 
         auto t_start = Clock::now();
 
-        auto result = aostar::search(task, *h, limit, deadline);
+        auto result = strategy == Strategy::AOSTAR
+            ? aostar::search(task, *h, limit, deadline)
+            : replan::search(task, *h, deadline);
 
         if (!result) {
             // AO* exhausted its budget. For partial-plan-linear domains

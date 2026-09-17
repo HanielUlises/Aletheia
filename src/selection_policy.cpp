@@ -40,7 +40,7 @@ constexpr std::array<std::string_view, 13> kFeatureNames{
     "goal_unsat_init",
 };
 
-constexpr std::array<std::string_view, 3> kStrategyLabels{"gbfs", "ehc", "aostar"};
+constexpr std::array<std::string_view, 4> kStrategyLabels{"gbfs", "ehc", "aostar", "replan"};
 
 constexpr std::array<std::string_view, 6> kHeuristicLabels{
     "ug", "ed", "ks", "wc", "rpg", "radd"};
@@ -299,11 +299,15 @@ Decision select(const std::vector<SelectionRule>& rules,
 SelectionPolicy SelectionPolicy::builtin() {
     SelectionPolicy p;
 
-    // Strategy. AO* is the only algorithm that can represent a contingent
-    // plan, so every sensing task prefers it while the branching stays
-    // tractable; the three thresholds below are where the suite stopped
-    // paying for it.
+    // Strategy. AO* and replan build contingent plans. AO* finds the shallowest
+    // one but deepens exhaustively, so goals with many unmet conjuncts go to
+    // replan (spy-ring sensing a5-k2: AO* timeout, replan 96 ms); the three
+    // AO* thresholds below are where the suite stopped paying for it.
     p.strategy_rules = {
+        rule("sensing-long-goal", "replan",
+             {cond("sensing", Comparison::Eq, 1),
+              cond("goal_unsat_init", Comparison::Ge, 4)}),
+
         rule("sensing-small-designated", "aostar",
              {cond("sensing", Comparison::Eq, 1),
               cond("designated", Comparison::Le, 16)}),

@@ -41,7 +41,7 @@ holds `null`. An empty array means the goal already held.
 | `--task <path>` | Grounded JSON task (required) |
 | `--plan <path>` | Output plan file (required) |
 | `--heuristic <label>` | `ug`, `ed`, `ks`, `wc`, `rpg`, `radd`. Default: chosen by policy |
-| `--strategy <label>` | `gbfs`, `ehc`, `aostar`. Default: chosen by policy |
+| `--strategy <label>` | `gbfs`, `ehc`, `aostar`, `replan`. Default: chosen by policy |
 | `--policy <path>` | Selection-policy JSON; replaces the built-in rules |
 | `--print-policy` | Write the effective policy to stdout and exit |
 | `--explain` | Report the task features and which rule decided each auto-selection |
@@ -127,7 +127,7 @@ starts:
 | `partial_obs` | 1 if any action has heterogeneous observability |
 | `goal_unsat_init` | top-level goal conjuncts false in the initial state |
 
-Outcomes must be `gbfs`, `ehc`, or `aostar` for strategy, and `ug`, `ed`, `ks`,
+Outcomes must be `gbfs`, `ehc`, `aostar`, or `replan` for strategy, and `ug`, `ed`, `ks`,
 `wc`, `rpg`, `radd` for heuristic.
 
 ### Validation

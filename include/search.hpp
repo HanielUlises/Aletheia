@@ -122,6 +122,12 @@ search(const PlanningTask& task, const Heuristic& h,
 
 } // namespace aostar
 
+// Conditional planning by replanning over the all-outcomes determinization.
+namespace replan {
+[[nodiscard]] std::optional<ConditionalSearchResult>
+search(const PlanningTask& task, const Heuristic& h, Deadline deadline = Deadline::max());
+} // namespace replan
+
 namespace ehc {
 
 // Enforced hill climbing. Descends to any h-improving successor; on a plateau,
