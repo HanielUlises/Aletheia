@@ -267,6 +267,7 @@ algorithm of §7.
 | `ed` | *epistemic distance*: for an unsatisfied $`[i]\varphi`$, the fraction of worlds $i$ considers possible that are counterexamples to $\varphi$; nested modalities are handled by projecting $`W^*`$ through $R_i$ and recursing |
 | `ks` | *knowledge spread*: the same measure specialised to conjunctions of $`\mathit{Kw}`$ goals across agents, where it tracks knowledge propagating through the agent graph |
 | `kadd` | *knowledge relaxation*: additive cost over a delete-free relaxation whose facts are literals and knowledge literals $`[j]\ell`$; an event teaches agent $`j`$ the literals shared by every event $`j`$ cannot tell it apart from (`src/knowledge_relaxation.cpp`) |
+| `kff` | same relaxation; counts the operators of the relaxed plan extracted from the cost fixpoint instead of summing goal costs (FF-style) |
 
 `ed` and `ks` improve on `ug` by giving a real-valued gradient where `ug` sees only 0 or 1 per conjunct. Both cut their counterexample scan off after a fixed number of accessible worlds to bound cost on wide models.
 

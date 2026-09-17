@@ -81,6 +81,8 @@ static std::unique_ptr<Heuristic> make_heuristic(const std::string& label,
     if (label == "rpg")  return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Max);
     if (label == "radd") return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Add);
     if (label == "kadd") return std::make_unique<KnowledgeRelaxationHeuristic>(task);
+    if (label == "kff")  return std::make_unique<KnowledgeRelaxationHeuristic>(
+                             task, KnowledgeRelaxationHeuristic::Estimate::FF);
     return nullptr;
 }
 
@@ -94,6 +96,7 @@ static const char* heuristic_display(const std::string& label) {
     if (label == "rpg")  return "relaxed-closure (max)";
     if (label == "radd") return "relaxed-closure (add)";
     if (label == "kadd") return "knowledge-relaxation (add)";
+    if (label == "kff")  return "knowledge-relaxation (ff)";
     return "unknown";  // unreachable: make_heuristic rejects the label first
 }
 
@@ -125,7 +128,7 @@ static void usage(const char* prog) {
         << "Options:\n"
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
-        << "  --heuristic    ug | ed | ks | wc | rpg | radd | kadd  (default: auto)\n"
+        << "  --heuristic    ug | ed | ks | wc | rpg | radd | kadd | kff  (default: auto)\n"
         << "  --strategy     gbfs | ehc | aostar | replan | portfolio  (default: auto)\n"
         << "  --policy       Selection-policy JSON; overrides the built-in\n"
         << "                 rules used to auto-select strategy and heuristic\n"

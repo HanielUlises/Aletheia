@@ -138,7 +138,8 @@ void KnowledgeRelaxationHeuristic::add_op(std::uint32_t pre, const std::vector<s
     ops_.push_back(op);
 }
 
-KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& task) {
+KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& task, Estimate estimate)
+    : estimate_(estimate) {
     const FormulaPtr& g = task.goal;
     if (g->kind == FormulaKind::And)
         for (const auto& c : g->children) goal_.push_back(compile(c, false));
@@ -419,65 +420,19 @@ std::uint32_t KnowledgeRelaxationHeuristic::costs(const EpistemicState& s, std::
     return rounds;
 }
 
-KnowledgeRelaxationHeuristic::Analysis
-KnowledgeRelaxationHeuristic::analyse(const EpistemicState& s) const {
-    std::vector<std::int32_t> fc, rc, sup;
-    Analysis a;
-    a.rounds = costs(s, fc, rc, &sup);
-    for (std::uint32_t r : goal_) {
-        if (rc[r] >= kInf) ++a.dead_goals;
-        else a.depth = std::max<std::uint32_t>(a.depth, static_cast<std::uint32_t>(rc[r]));
-    }
-    // Operators of the relaxed plan: backchain from the goal as in preferred().
-    std::vector<char> used(ops_.size(), 0), seen_req(reqs_.size(), 0), seen_fact(facts_.size(), 0);
-    std::vector<std::uint32_t> stack(goal_.begin(), goal_.end());
-    while (!stack.empty()) {
-        const std::uint32_t r = stack.back();
-        stack.pop_back();
-        if (seen_req[r] || rc[r] == 0 || rc[r] >= kInf) continue;
-        seen_req[r] = 1;
-        const Req& q = reqs_[r];
-        if (q.kind == Kind::And) {
-            for (std::uint32_t i = q.begin; i < q.end; ++i) stack.push_back(req_children_[i]);
-        } else if (q.kind == Kind::Or) {
-            std::uint32_t best = req_children_[q.begin];
-            for (std::uint32_t i = q.begin; i < q.end; ++i)
-                if (rc[req_children_[i]] < rc[best]) best = req_children_[i];
-            stack.push_back(best);
-        } else if (q.kind == Kind::Fact && !seen_fact[q.fact]) {
-            seen_fact[q.fact] = 1;
-            if (sup[q.fact] >= 0) { used[sup[q.fact]] = 1; stack.push_back(ops_[sup[q.fact]].pre); }
-            else if (derived_[q.fact] >= 0) stack.push_back(static_cast<std::uint32_t>(derived_[q.fact]));
-        }
-    }
-    for (char u : used) a.relaxed_plan += u;
-    for (const auto& f : facts_) a.facts += f != nullptr;
-    a.operators = static_cast<std::uint32_t>(ops_.size());
-    return a;
-}
-
-float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,
-                                               const PlanningTask&) const {
-    thread_local std::vector<std::int32_t> fc, rc;
-    costs(s, fc, rc, nullptr);
-    float h = 0.f;
-    for (std::uint32_t r : goal_) h += rc[r] >= kInf ? kDead : float(rc[r]);
-    return h;
-}
-
-bool KnowledgeRelaxationHeuristic::preferred(const EpistemicState& s, const PlanningTask&,
-                                             std::vector<ActionIdx>& out) const {
-    thread_local std::vector<std::int32_t> fc, rc, sup;
-    thread_local std::vector<char> seen_req, seen_fact;
-    costs(s, fc, rc, &sup);
-    out.clear();
+std::uint32_t KnowledgeRelaxationHeuristic::extract(const std::vector<std::int32_t>& rc,
+                                                    const std::vector<std::int32_t>& sup,
+                                                    std::vector<ActionIdx>* helpful) const {
+    thread_local std::vector<char> used, seen_req, seen_fact;
+    thread_local std::vector<std::uint32_t> stack;
+    used.assign(ops_.size(), 0);
     seen_req.assign(reqs_.size(), 0);
     seen_fact.assign(facts_.size(), 0);
 
-    // Backchain from the goal: cheapest disjunct, every conjunct, and for each
-    // unmet fact its supporting operator. Operators whose precondition already
-    // costs nothing are the helpful actions.
-    std::vector<std::uint32_t> stack(goal_.begin(), goal_.end());
+    // Every conjunct, the cheapest disjunct, and for each unmet fact its
+    // supporting operator.
+    std::uint32_t n = 0;
+    stack.assign(goal_.begin(), goal_.end());
     while (!stack.empty()) {
         const std::uint32_t r = stack.back();
         stack.pop_back();
@@ -501,8 +456,12 @@ bool KnowledgeRelaxationHeuristic::preferred(const EpistemicState& s, const Plan
                 seen_fact[f] = 1;
                 if (sup[f] >= 0) {
                     const Op& op = ops_[sup[f]];
-                    if (rc[op.pre] == 0) out.push_back(op.action);
-                    else stack.push_back(op.pre);
+                    if (!used[sup[f]]) {
+                        used[sup[f]] = 1;
+                        ++n;
+                        if (helpful && rc[op.pre] == 0) helpful->push_back(op.action);
+                    }
+                    stack.push_back(op.pre);
                 } else if (derived_[f] >= 0) {
                     stack.push_back(static_cast<std::uint32_t>(derived_[f]));
                 }
@@ -511,6 +470,44 @@ bool KnowledgeRelaxationHeuristic::preferred(const EpistemicState& s, const Plan
             default: break;
         }
     }
+    return n;
+}
+
+KnowledgeRelaxationHeuristic::Analysis
+KnowledgeRelaxationHeuristic::analyse(const EpistemicState& s) const {
+    std::vector<std::int32_t> fc, rc, sup;
+    Analysis a;
+    a.rounds = costs(s, fc, rc, &sup);
+    for (std::uint32_t r : goal_) {
+        if (rc[r] >= kInf) ++a.dead_goals;
+        else a.depth = std::max<std::uint32_t>(a.depth, static_cast<std::uint32_t>(rc[r]));
+    }
+    a.relaxed_plan = extract(rc, sup, nullptr);
+    for (const auto& f : facts_) a.facts += f != nullptr;
+    a.operators = static_cast<std::uint32_t>(ops_.size());
+    return a;
+}
+
+float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,
+                                               const PlanningTask&) const {
+    thread_local std::vector<std::int32_t> fc, rc, sup;
+    float h = 0.f;
+    if (estimate_ == Estimate::Add) {
+        costs(s, fc, rc, nullptr);
+        for (std::uint32_t r : goal_) h += rc[r] >= kInf ? kDead : float(rc[r]);
+        return h;
+    }
+    costs(s, fc, rc, &sup);
+    for (std::uint32_t r : goal_) h += rc[r] >= kInf ? kDead : 0.f;
+    return h + float(extract(rc, sup, nullptr));
+}
+
+bool KnowledgeRelaxationHeuristic::preferred(const EpistemicState& s, const PlanningTask&,
+                                             std::vector<ActionIdx>& out) const {
+    thread_local std::vector<std::int32_t> fc, rc, sup;
+    costs(s, fc, rc, &sup);
+    out.clear();
+    extract(rc, sup, &out);
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
     return true;

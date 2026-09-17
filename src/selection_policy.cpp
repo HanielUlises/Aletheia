@@ -42,8 +42,8 @@ constexpr std::array<std::string_view, 13> kFeatureNames{
 
 constexpr std::array<std::string_view, 5> kStrategyLabels{"gbfs", "ehc", "aostar", "replan", "portfolio"};
 
-constexpr std::array<std::string_view, 7> kHeuristicLabels{
-    "ug", "ed", "ks", "wc", "rpg", "radd", "kadd"};
+constexpr std::array<std::string_view, 8> kHeuristicLabels{
+    "ug", "ed", "ks", "wc", "rpg", "radd", "kadd", "kff"};
 
 // A rule with no conditions is a terminal default; anything after it is dead.
 // Building rules by hand makes that easy to get wrong, so both the built-in
@@ -362,14 +362,16 @@ SelectionPolicy SelectionPolicy::builtin() {
     // Heuristic. The first two rules share an outcome because the original
     // condition was a disjunction; first-match ordering makes that faithful.
     p.heuristic_rules = {
+        // Contingent search needs chained knowledge (IεPC hard blocks-world
+        // bw-4-5-2: replan with kadd 44 s, with ed timeout). kff finds longer
+        // policies there (bw-3-3-2-clumsy: 16 -> 59 steps).
+        rule("sensing-kadd", "kadd", {cond("sensing", Comparison::Eq, 1)}),
+
         // Long goals need chained actions (move, then tell, then the listener
         // knows); only the knowledge relaxation estimates that distance.
-        // spy-ring linear a8: plan 286 -> 23 steps.
-        rule("long-goal", "kadd", {cond("goal_unsat_init", Comparison::Ge, 4)}),
-
-        // Contingent search also needs chained knowledge (IεPC hard
-        // blocks-world bw-4-5-2: replan with kadd 44 s, with ed timeout).
-        rule("sensing-kadd", "kadd", {cond("sensing", Comparison::Eq, 1)}),
+        // spy-ring linear a8: plan 286 -> 23 steps. Counting relaxed-plan
+        // operators instead of summing costs: bw-50 30 s, kadd timeout.
+        rule("long-goal", "kff", {cond("goal_unsat_init", Comparison::Ge, 4)}),
 
         // ks counts unresolved worlds per Kw conjunct — the right gradient
         // when every conjunct is Kw-shaped. ed would project through the

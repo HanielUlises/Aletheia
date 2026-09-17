@@ -25,7 +25,11 @@
 // interning; facts and operators that cannot reach the goal are dropped.
 class KnowledgeRelaxationHeuristic : public Heuristic {
 public:
-    explicit KnowledgeRelaxationHeuristic(const PlanningTask& task);
+    // Add sums goal-conjunct costs (kadd); FF counts the operators of the
+    // relaxed plan extracted from the same fixpoint (kff).
+    enum class Estimate : std::uint8_t { Add, FF };
+
+    explicit KnowledgeRelaxationHeuristic(const PlanningTask& task, Estimate estimate = Estimate::Add);
 
     float operator()(const EpistemicState& s, const PlanningTask& task) const override;
 
@@ -66,7 +70,12 @@ private:
     // or -1 when initial or derived.
     std::uint32_t costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
                         std::vector<std::int32_t>& rc, std::vector<std::int32_t>* supporter) const;
+    // Relaxed plan backchained from the goal; returns its operator count and
+    // appends to `helpful` the actions of operators applicable now.
+    std::uint32_t extract(const std::vector<std::int32_t>& rc, const std::vector<std::int32_t>& sup,
+                          std::vector<ActionIdx>* helpful) const;
 
+    Estimate      estimate_{Estimate::Add};
     ActionIdx     current_action_{0};
 
     std::vector<Req>           reqs_;
