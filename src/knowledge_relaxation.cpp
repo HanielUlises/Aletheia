@@ -1,0 +1,299 @@
+#include "knowledge_relaxation.hpp"
+
+#include <algorithm>
+
+namespace {
+
+constexpr std::int32_t kInf  = 1 << 29;
+constexpr float        kDead = 1000.f;   // per goal conjunct unreachable in the relaxation
+
+std::int32_t add_sat(std::int32_t a, std::int32_t b) { return std::min(a + b, kInf); }
+
+bool is_literal(const Formula& f) {
+    return f.kind == FormulaKind::Atom ||
+           (f.kind == FormulaKind::Not && f.children[0]->kind == FormulaKind::Atom);
+}
+
+AtomIdx atom_of(const Formula& lit) {
+    return lit.kind == FormulaKind::Atom ? lit.atom : lit.children[0]->atom;
+}
+
+void literal_conjuncts(const FormulaPtr& f, std::vector<FormulaPtr>& out) {
+    if (f->kind == FormulaKind::And) {
+        for (const auto& c : f->children) literal_conjuncts(c, out);
+    } else if (is_literal(*f)) {
+        out.push_back(f);
+    }
+}
+
+// Literals guaranteed to hold after event e: unoverwritten precondition
+// conjuncts plus unconditional postconditions. Sorted by formula id.
+std::vector<FormulaPtr> after_literals(const Event& ev) {
+    std::vector<FormulaPtr> lits;
+    literal_conjuncts(ev.precondition, lits);
+    std::erase_if(lits, [&](const FormulaPtr& l) {
+        const AtomIdx p = atom_of(*l);
+        return ev.post_true.count(p) || ev.post_false.count(p);
+    });
+    for (const auto& [p, cond] : ev.post_true)
+        if (cond->kind == FormulaKind::Top && !ev.post_false.count(p))
+            lits.push_back(Formula::make_atom(p));
+    for (const auto& [p, cond] : ev.post_false)
+        if (cond->kind == FormulaKind::Top && !ev.post_true.count(p))
+            lits.push_back(Formula::make_not(Formula::make_atom(p)));
+    std::sort(lits.begin(), lits.end(), [](auto& x, auto& y) { return x->id < y->id; });
+    lits.erase(std::unique(lits.begin(), lits.end()), lits.end());
+    return lits;
+}
+
+} // namespace
+
+std::uint32_t KnowledgeRelaxationHeuristic::node(Kind k, std::vector<std::uint32_t> children) {
+    Req r;
+    r.kind  = k;
+    r.begin = static_cast<std::uint32_t>(req_children_.size());
+    req_children_.insert(req_children_.end(), children.begin(), children.end());
+    r.end   = static_cast<std::uint32_t>(req_children_.size());
+    reqs_.push_back(r);
+    return static_cast<std::uint32_t>(reqs_.size() - 1);
+}
+
+std::uint32_t KnowledgeRelaxationHeuristic::fact(const FormulaPtr& f) {
+    if (auto it = fact_of_.find(f->id); it != fact_of_.end()) return it->second;
+
+    const auto idx = static_cast<std::uint32_t>(facts_.size());
+    fact_of_[f->id] = idx;
+    facts_.push_back(f);
+    derived_.push_back(-1);
+
+    if (f->kind == FormulaKind::Kw && is_literal(*f->children[0])) {
+        const FormulaPtr& p = f->children[0];
+        const std::uint32_t pos = fact(Formula::make_belief(f->agent, p));
+        const std::uint32_t neg = fact(Formula::make_belief(
+            f->agent, p->kind == FormulaKind::Not ? p->children[0] : Formula::make_not(p)));
+        Req a{Kind::Fact, pos, 0, 0}, b{Kind::Fact, neg, 0, 0};
+        reqs_.push_back(a);
+        const auto ra = static_cast<std::uint32_t>(reqs_.size() - 1);
+        reqs_.push_back(b);
+        const auto rb = static_cast<std::uint32_t>(reqs_.size() - 1);
+        derived_[idx] = static_cast<std::int32_t>(node(Kind::Or, {ra, rb}));
+    }
+    return idx;
+}
+
+std::uint32_t KnowledgeRelaxationHeuristic::compile(const FormulaPtr& f, bool negated) {
+    const std::uint64_t key = (std::uint64_t(f->id) << 1) | (negated ? 1 : 0);
+    if (auto it = compiled_.find(key); it != compiled_.end()) return it->second;
+
+    std::uint32_t out = 0;
+    switch (f->kind) {
+        case FormulaKind::Top:
+            out = node(negated ? Kind::False : Kind::True, {});
+            break;
+        case FormulaKind::Bot:
+            out = node(negated ? Kind::True : Kind::False, {});
+            break;
+        case FormulaKind::Not:
+            out = compile(f->children[0], !negated);
+            break;
+        case FormulaKind::And:
+        case FormulaKind::Or: {
+            std::vector<std::uint32_t> cs;
+            for (const auto& c : f->children) cs.push_back(compile(c, negated));
+            const bool conj = (f->kind == FormulaKind::And) != negated;
+            out = node(conj ? Kind::And : Kind::Or, std::move(cs));
+            break;
+        }
+        default: {   // atoms and modal formulas are facts
+            const std::uint32_t fi = fact(negated ? Formula::make_not(f) : f);
+            Req r{Kind::Fact, fi, 0, 0};
+            reqs_.push_back(r);
+            out = static_cast<std::uint32_t>(reqs_.size() - 1);
+        }
+    }
+    compiled_[key] = out;
+    return out;
+}
+
+void KnowledgeRelaxationHeuristic::add_op(std::uint32_t pre, const std::vector<std::uint32_t>& adds) {
+    if (adds.empty()) return;
+    Op op{pre, static_cast<std::uint32_t>(op_adds_.size()), 0};
+    op_adds_.insert(op_adds_.end(), adds.begin(), adds.end());
+    op.end = static_cast<std::uint32_t>(op_adds_.size());
+    ops_.push_back(op);
+}
+
+KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& task) {
+    const FormulaPtr& g = task.goal;
+    if (g->kind == FormulaKind::And)
+        for (const auto& c : g->children) goal_.push_back(compile(c, false));
+    else
+        goal_.push_back(compile(g, false));
+
+    for (const Action& a : task.actions) {
+        const std::size_t ne = a.events.size();
+        std::vector<std::vector<FormulaPtr>> after(ne);
+        for (std::size_t e = 0; e < ne; ++e) after[e] = after_literals(a.events[e]);
+
+        for (EventIdx e : a.designated_events) {
+            if (e >= ne) continue;
+            const Event& ev = a.events[e];
+            const std::uint32_t pre = compile(ev.precondition, false);
+
+            std::vector<std::uint32_t> ontic;
+            for (const auto& [p, cond] : ev.post_true) {
+                const std::uint32_t lit = fact(Formula::make_atom(p));
+                if (cond->kind == FormulaKind::Top) ontic.push_back(lit);
+                else add_op(node(Kind::And, {pre, compile(cond, false)}), {lit});
+            }
+            for (const auto& [p, cond] : ev.post_false) {
+                const std::uint32_t lit = fact(Formula::make_not(Formula::make_atom(p)));
+                if (cond->kind == FormulaKind::Top) ontic.push_back(lit);
+                else add_op(node(Kind::And, {pre, compile(cond, false)}), {lit});
+            }
+            add_op(pre, ontic);
+
+            for (AgentIdx j = 0; j < task.num_agents(); ++j) {
+                const auto learned_from = [&](bits::ConstWordSpan row) {
+                    std::vector<FormulaPtr> common;
+                    bool first = true;
+                    bits::for_each(row, [&](std::uint32_t f) {
+                        if (f >= ne) return;
+                        if (first) { common = after[f]; first = false; return; }
+                        std::vector<FormulaPtr> keep;
+                        std::set_intersection(common.begin(), common.end(),
+                                              after[f].begin(), after[f].end(),
+                                              std::back_inserter(keep),
+                                              [](auto& x, auto& y) { return x->id < y->id; });
+                        common.swap(keep);
+                    });
+                    std::vector<std::uint32_t> gains;
+                    for (const auto& l : common) gains.push_back(fact(Formula::make_belief(j, l)));
+                    return gains;
+                };
+
+                if (j >= a.obs_cases.size() || a.obs_cases[j].empty()) {
+                    std::vector<bits::Word> all(bits::words_for(ne), 0);
+                    bits::fill_all(all, ne);
+                    add_op(pre, learned_from(all));
+                    continue;
+                }
+                for (const ObsCase& c : a.obs_cases[j]) {
+                    auto gains = learned_from(c.event_row(e));
+                    if (!gains.empty())
+                        add_op(node(Kind::And, {pre, compile(c.condition, false)}), gains);
+                }
+            }
+        }
+    }
+    prune();
+}
+
+// Keeps only facts, requirements and operators that can contribute to the goal.
+void KnowledgeRelaxationHeuristic::prune() {
+    std::vector<char> req_needed(reqs_.size(), 0), fact_needed(facts_.size(), 0);
+    std::vector<std::uint32_t> stack;
+
+    const auto mark = [&](std::uint32_t r) {
+        stack.push_back(r);
+        while (!stack.empty()) {
+            const std::uint32_t x = stack.back();
+            stack.pop_back();
+            if (req_needed[x]) continue;
+            req_needed[x] = 1;
+            const Req& q = reqs_[x];
+            if (q.kind == Kind::Fact && !fact_needed[q.fact]) {
+                fact_needed[q.fact] = 1;
+                if (derived_[q.fact] >= 0) stack.push_back(static_cast<std::uint32_t>(derived_[q.fact]));
+            }
+            for (std::uint32_t i = q.begin; i < q.end; ++i) stack.push_back(req_children_[i]);
+        }
+    };
+
+    for (std::uint32_t r : goal_) mark(r);
+    std::vector<char> op_needed(ops_.size(), 0);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t o = 0; o < ops_.size(); ++o) {
+            if (op_needed[o]) continue;
+            for (std::uint32_t i = ops_[o].begin; i < ops_[o].end; ++i)
+                if (fact_needed[op_adds_[i]]) { op_needed[o] = 1; break; }
+            if (op_needed[o]) { mark(ops_[o].pre); changed = true; }
+        }
+    }
+
+    std::vector<Op> ops;
+    std::vector<std::uint32_t> adds;
+    for (std::size_t o = 0; o < ops_.size(); ++o) {
+        if (!op_needed[o]) continue;
+        Op op{ops_[o].pre, static_cast<std::uint32_t>(adds.size()), 0};
+        for (std::uint32_t i = ops_[o].begin; i < ops_[o].end; ++i)
+            if (fact_needed[op_adds_[i]]) adds.push_back(op_adds_[i]);
+        op.end = static_cast<std::uint32_t>(adds.size());
+        ops.push_back(op);
+    }
+    ops_.swap(ops);
+    op_adds_.swap(adds);
+
+    // Unneeded requirements become constants so evaluation can skip them;
+    // unneeded facts are never evaluated against the state.
+    for (std::size_t r = 0; r < reqs_.size(); ++r)
+        if (!req_needed[r]) reqs_[r] = Req{Kind::False, 0, 0, 0};
+    for (std::size_t f = 0; f < facts_.size(); ++f)
+        if (!fact_needed[f]) { facts_[f] = nullptr; derived_[f] = -1; }
+}
+
+float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,
+                                               const PlanningTask&) const {
+    thread_local std::vector<std::int32_t> fc, rc;
+    fc.assign(facts_.size(), kInf);
+    rc.assign(reqs_.size(), kInf);
+
+    const auto des = s.designated_bits();
+    for (std::size_t f = 0; f < facts_.size(); ++f)
+        if (facts_[f] && bits::intersects(des, s.sat(*facts_[f]))) fc[f] = 0;
+
+    const auto eval = [&] {
+        for (std::size_t r = 0; r < reqs_.size(); ++r) {
+            const Req& q = reqs_[r];
+            switch (q.kind) {
+                case Kind::True:  rc[r] = 0; break;
+                case Kind::False: rc[r] = kInf; break;
+                case Kind::Fact:  rc[r] = fc[q.fact]; break;
+                case Kind::And: {
+                    std::int32_t c = 0;
+                    for (std::uint32_t i = q.begin; i < q.end && c < kInf; ++i)
+                        c = add_sat(c, rc[req_children_[i]]);
+                    rc[r] = c;
+                    break;
+                }
+                case Kind::Or: {
+                    std::int32_t c = kInf;
+                    for (std::uint32_t i = q.begin; i < q.end; ++i) c = std::min(c, rc[req_children_[i]]);
+                    rc[r] = c;
+                    break;
+                }
+            }
+        }
+    };
+
+    // Children precede parents in reqs_, so one ordered pass per round is exact
+    // for the current fact costs; rounds propagate operator effects.
+    for (int round = 0; round < 1024; ++round) {
+        eval();
+        bool changed = false;
+        for (const Op& op : ops_) {
+            const std::int32_t c = rc[op.pre];
+            if (c >= kInf) continue;
+            for (std::uint32_t i = op.begin; i < op.end; ++i)
+                if (c + 1 < fc[op_adds_[i]]) { fc[op_adds_[i]] = c + 1; changed = true; }
+        }
+        for (std::size_t f = 0; f < facts_.size(); ++f)
+            if (derived_[f] >= 0 && rc[derived_[f]] < fc[f]) { fc[f] = rc[derived_[f]]; changed = true; }
+        if (!changed) break;
+    }
+
+    float h = 0.f;
+    for (std::uint32_t r : goal_) h += rc[r] >= kInf ? kDead : float(rc[r]);
+    return h;
+}

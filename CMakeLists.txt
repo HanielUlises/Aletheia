@@ -24,6 +24,7 @@ set(SOURCES
     src/product_update.cpp
     src/bisimulation.cpp
     src/heuristic.cpp
+    src/knowledge_relaxation.cpp
     src/selection_policy.cpp
     src/search.cpp
     src/replan.cpp

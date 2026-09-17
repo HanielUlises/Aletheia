@@ -41,6 +41,5 @@ Grounded JSON over 1 MB is not committed; `ground.sh` rebuilds it.
 
 | mode | solved | notes |
 |---|---:|---|
-| linear | 9/9 | GBFS; a9-k6-r7 (64 worlds) in 3.1 s, plans far from optimal |
-| sensing | 6/9 | replan; a6-k3-r4 in 17 s, 8-leaf policy |
-| sensing a6-k4, a7-k5, a8-k6 | — | timeout; a7–a8 reach 5–6 GB |
+| linear | 9/9 | GBFS + kadd; a9-k6-r7 (64 worlds): 21-step plan, 2.5 s |
+| sensing | 9/9 | replan + kadd; a8-k6-r7: 64-leaf policy, 43 s, 97 MB |

@@ -3,6 +3,7 @@
 #include "search.hpp"
 #include "heuristic.hpp"
 #include "selection_policy.hpp"
+#include "knowledge_relaxation.hpp"
 #include "parallel.hpp"
 #include "symmetry.hpp"
 
@@ -69,13 +70,15 @@ static bool has_sensing_actions(const PlanningTask& task) {
     return false;
 }
 
-static std::unique_ptr<Heuristic> make_heuristic(const std::string& label) {
+static std::unique_ptr<Heuristic> make_heuristic(const std::string& label,
+                                                 const PlanningTask& task) {
     if (label == "ug")   return std::make_unique<UnsatisfiedGoalHeuristic>();
     if (label == "ed")   return std::make_unique<EpistemicDistanceHeuristic>();
     if (label == "ks")   return std::make_unique<KnowledgeSpreadHeuristic>();
     if (label == "wc")   return std::make_unique<WorldCountHeuristic>();
     if (label == "rpg")  return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Max);
     if (label == "radd") return std::make_unique<RelaxedClosureHeuristic>(RelaxedAggregation::Add);
+    if (label == "kadd") return std::make_unique<KnowledgeRelaxationHeuristic>(task);
     return nullptr;
 }
 
@@ -88,6 +91,7 @@ static const char* heuristic_display(const std::string& label) {
     if (label == "wc")   return "world-count";
     if (label == "rpg")  return "relaxed-closure (max)";
     if (label == "radd") return "relaxed-closure (add)";
+    if (label == "kadd") return "knowledge-relaxation (add)";
     return "unknown";  // unreachable: make_heuristic rejects the label first
 }
 
@@ -117,7 +121,7 @@ static void usage(const char* prog) {
         << "Options:\n"
         << "  --task         Path to grounded JSON task\n"
         << "  --plan         Output plan file\n"
-        << "  --heuristic    ug | ed | ks | wc | rpg | radd  (default: auto)\n"
+        << "  --heuristic    ug | ed | ks | wc | rpg | radd | kadd  (default: auto)\n"
         << "  --strategy     gbfs | ehc | aostar | replan    (default: auto)\n"
         << "  --policy       Selection-policy JSON; overrides the built-in\n"
         << "                 rules used to auto-select strategy and heuristic\n"
@@ -228,7 +232,7 @@ int main(int argc, char* argv[]) {
         heuristic_rule  = d.rule;
     }
 
-    auto h = make_heuristic(heuristic_label);
+    auto h = make_heuristic(heuristic_label, task);
     if (!h) {
         std::cerr << "Error: unknown heuristic '" << heuristic_label << "'; expected one of:";
         for (auto& l : heuristic_labels()) std::cerr << ' ' << l;

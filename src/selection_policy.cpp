@@ -42,8 +42,8 @@ constexpr std::array<std::string_view, 13> kFeatureNames{
 
 constexpr std::array<std::string_view, 4> kStrategyLabels{"gbfs", "ehc", "aostar", "replan"};
 
-constexpr std::array<std::string_view, 6> kHeuristicLabels{
-    "ug", "ed", "ks", "wc", "rpg", "radd"};
+constexpr std::array<std::string_view, 7> kHeuristicLabels{
+    "ug", "ed", "ks", "wc", "rpg", "radd", "kadd"};
 
 // A rule with no conditions is a terminal default; anything after it is dead.
 // Building rules by hand makes that easy to get wrong, so both the built-in
@@ -362,6 +362,11 @@ SelectionPolicy SelectionPolicy::builtin() {
     // Heuristic. The first two rules share an outcome because the original
     // condition was a disjunction; first-match ordering makes that faithful.
     p.heuristic_rules = {
+        // Long goals need chained actions (move, then tell, then the listener
+        // knows); only the knowledge relaxation estimates that distance.
+        // spy-ring linear a8: plan 286 -> 23 steps.
+        rule("long-goal", "kadd", {cond("goal_unsat_init", Comparison::Ge, 4)}),
+
         // ks counts unresolved worlds per Kw conjunct — the right gradient
         // when every conjunct is Kw-shaped. ed would project through the
         // Belief operators Kw expands into and double-count.
