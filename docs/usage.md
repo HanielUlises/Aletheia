@@ -48,6 +48,7 @@ holds `null`. An empty array means the goal already held.
 | `--limit <n>` | Max nodes (GBFS/EHC) or max depth (AO\*); 0 = unlimited |
 | `--timeout <s>` | Timeout in seconds (AO\* only) |
 | `--gbfs`, `--ehc`, `--conditional` | Aliases for `--strategy gbfs` / `ehc` / `aostar` |
+| `--no-symmetry` | Disable agent-symmetry pruning (on by default) |
 | `--help` | Show usage |
 
 An unknown heuristic or strategy label is an error listing the valid ones, not

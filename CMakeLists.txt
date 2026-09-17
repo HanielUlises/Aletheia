@@ -24,6 +24,7 @@ set(SOURCES
     src/heuristic.cpp
     src/selection_policy.cpp
     src/search.cpp
+    src/symmetry.cpp
     src/validator.cpp
 )
 

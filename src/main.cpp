@@ -3,6 +3,7 @@
 #include "search.hpp"
 #include "heuristic.hpp"
 #include "selection_policy.hpp"
+#include "symmetry.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -124,6 +125,7 @@ static void usage(const char* prog) {
         << "  --ehc          Force EHC (alias for --strategy ehc)\n"
         << "  --gbfs         Force GBFS (alias for --strategy gbfs)\n"
         << "  --conditional  Force AO* (alias for --strategy aostar)\n"
+        << "  --no-symmetry  Disable agent-symmetry pruning\n"
         << "  --help         Show this message\n";
 }
 
@@ -140,6 +142,7 @@ int main(int argc, char* argv[]) {
 
     bool print_policy = false;
     bool explain      = false;
+    bool symmetry     = true;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -156,6 +159,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--conditional")  strategy_name_arg = "aostar";
         else if (arg == "--ehc")          strategy_name_arg = "ehc";
         else if (arg == "--gbfs")         strategy_name_arg = "gbfs";
+        else if (arg == "--no-symmetry")  symmetry          = false;
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
             std::cerr << "Unknown argument: " << arg << "\n";
@@ -195,6 +199,12 @@ int main(int argc, char* argv[]) {
     }
 
     const TaskFeatures features = TaskFeatures::extract(task);
+
+    if (symmetry) {
+        auto sym = std::make_shared<AgentSymmetry>(AgentSymmetry::detect(task));
+        std::cerr << "[symmetry] " << sym->swaps.size() << " agent swaps\n";
+        if (!sym->empty()) task.symmetry = std::move(sym);
+    }
 
     if (explain) {
         std::cerr << "[main] Features:";

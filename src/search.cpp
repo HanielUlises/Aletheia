@@ -2,6 +2,7 @@
 
 #include "bisimulation.hpp"
 #include "product_update.hpp"
+#include "symmetry.hpp"
 #include "world_cap_policy.hpp"
 
 #include <algorithm>
@@ -34,6 +35,24 @@
 // different world labellings fingerprint identically and are not re-expanded. A
 // hash sensitive to world numbering would not have that property, and would
 // re-expand states already closed.
+
+
+namespace {
+
+// Stabiliser of a canonical state under the task's agent swaps.
+StateSymmetry symmetry_of(const PlanningTask& task, const EpistemicState& s) {
+    return task.symmetry ? stabiliser(*task.symmetry, s) : StateSymmetry{};
+}
+
+// False for an action that is not its orbit's representative at this state.
+bool keep(const PlanningTask& task, const StateSymmetry& stab, ActionIdx ai,
+          PlannerStats& stats) {
+    if (stab.trivial || stab.keep(*task.symmetry, ai)) return true;
+    ++stats.pruned_symmetric;
+    return false;
+}
+
+} // namespace
 
 namespace {
 
@@ -140,8 +159,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         const std::uint32_t cur_idx = cur.idx;
         bool generated_successor = false;
 
+        const StateSymmetry stab = symmetry_of(task, nodes[cur_idx].state);
+
         for (ActionIdx ai = 0; ai < task.actions.size(); ++ai) {
             const Action& action = task.actions[ai];
+            if (!keep(task, stab, ai, result.stats)) continue;
             if (!action.applicable(nodes[cur_idx].state)) continue;
 
             auto maybe = product_update(nodes[cur_idx].state, action, task.kd45, cap);
@@ -289,8 +311,11 @@ std::vector<Expansion> expand(const EpistemicState& s, Context& ctx) {
     std::vector<Expansion> out;
     out.reserve(ctx.task.actions.size());
 
+    const StateSymmetry stab = symmetry_of(ctx.task, s);
+
     for (ActionIdx ai = 0; ai < ctx.task.actions.size(); ++ai) {
         const Action& a = ctx.task.actions[ai];
+        if (!keep(ctx.task, stab, ai, ctx.stats)) continue;
         if (!a.applicable(s)) continue;
 
         auto branches = product_update_split(s, a, ctx.task.kd45, ctx.cap);
@@ -544,8 +569,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         };
         std::vector<Succ> succs;
 
+        const StateSymmetry stab = symmetry_of(task, nodes[cur_idx].state);
+
         for (ActionIdx ai = 0; ai < task.actions.size(); ++ai) {
             const Action& action = task.actions[ai];
+            if (!keep(task, stab, ai, result.stats)) continue;
             if (!action.applicable(nodes[cur_idx].state)) continue;
 
             auto maybe = product_update(nodes[cur_idx].state, action, task.kd45, cap);
@@ -615,8 +643,11 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             result.stats.nodes_expanded++;
             if (budget_exhausted()) { result.stats.stop_timer(); return std::nullopt; }
 
+            const StateSymmetry stab = symmetry_of(task, nodes[node_idx].state);
+
             for (ActionIdx ai = 0; ai < task.actions.size(); ++ai) {
                 const Action& action = task.actions[ai];
+                if (!keep(task, stab, ai, result.stats)) continue;
                 if (!action.applicable(nodes[node_idx].state)) continue;
 
                 auto maybe = product_update(nodes[node_idx].state, action, task.kd45, cap);

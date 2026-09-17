@@ -28,6 +28,7 @@ struct PlannerStats {
     std::size_t pruned_world_cap{0};
     std::size_t pruned_non_serial{0};
     std::size_t pruned_inapplicable{0};
+    std::size_t pruned_symmetric{0};
 
     std::size_t heuristic_calls{0};
     std::size_t heuristic_improvements{0};
