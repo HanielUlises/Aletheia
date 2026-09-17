@@ -27,19 +27,15 @@ Homology homology(const EpistemicState& s) {
     Homology h;
     const std::uint32_t nw = s.num_worlds, na = s.num_agents;
 
+    // Contracted states intern successor sets by content, so equal rows of one
+    // agent share a set id and (agent, set) identifies a vertex.
     std::vector<std::uint32_t> vertex(std::size_t(na) * nw);
     for (AgentIdx ag = 0; ag < na; ++ag) {
-        std::unordered_map<std::uint64_t, std::vector<std::pair<WorldIdx, std::uint32_t>>> rows;
+        std::unordered_map<std::uint32_t, std::uint32_t> ids;
         for (WorldIdx w = 0; w < nw; ++w) {
-            const auto row = s.succ(ag, w);
-            std::uint64_t k = 0;
-            for (bits::Word x : row) k = bits::mix64(k ^ x);
-            auto& cands = rows[k];
-            std::uint32_t id = UINT32_MAX;
-            for (auto [v, vid] : cands)
-                if (bits::equal(s.succ(ag, v), row)) { id = vid; break; }
-            if (id == UINT32_MAX) { id = static_cast<std::uint32_t>(h.vertices++); cands.emplace_back(w, id); }
-            vertex[std::size_t(ag) * nw + w] = id;
+            auto [it, fresh] = ids.try_emplace(s.succ_set(ag, w), static_cast<std::uint32_t>(h.vertices));
+            if (fresh) ++h.vertices;
+            vertex[std::size_t(ag) * nw + w] = it->second;
         }
     }
 

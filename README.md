@@ -20,8 +20,8 @@ Aletheia is a planner for Dynamic Epistemic Logic (DEL) planning tasks over $S5_
 
 This document describes the design of the current implementation. Three decisions dominate it:
 
-1. **Models are bit matrices.**  
-   A model is three flat arrays of 64-bit words — valuation, accessibility, designation. Modal operators become word-parallel set operations rather than pointer traversals.
+1. **Accessibility is a table of successor sets.**  
+   Each agent maps every world to one of a model's distinct successor sets, stored once as a sorted world list. Epistemic models repeat successor sets heavily, so a model costs $O(\lvert Ag\rvert\cdot\lvert W\rvert)$ rather than $\lvert Ag\rvert\cdot\lvert W\rvert^2$ bits, and modal operators are decided once per set.
 
 2. **Formulas are evaluated as extensions, not pointwise.**  
    For each subformula the planner computes the set of worlds at which it holds, bottom-up over the whole model, memoised on hash-consed formula identity. Common knowledge becomes a single greatest fixpoint instead of one graph search per world.
@@ -106,26 +106,29 @@ Bisimilar worlds satisfy exactly the same formulas, so quotienting by bisimilari
 
 ## 3. Representation
 
-### 3.1 The model as three arrays
+### 3.1 The model as a set table
 
 An epistemic state is stored as
 
-| Array        | Shape (in 64-bit words) | Contents |
-|--------------|-------------------------|----------|
-| `valuation`  | $`\lvert W\rvert \times \lceil \lvert P\rvert/64\rceil`$ | $V$ as a bit matrix, row per world |
-| `relation`   | $`\lvert Ag\rvert \times \lvert W\rvert \times \lceil \lvert W\rvert/64\rceil`$ | each $R_i$ as a bit matrix, row per source world |
-| `designated` | $`\lceil \lvert W\rvert/64\rceil`$ | $`W^*`$ |
+| Array        | Shape | Contents |
+|--------------|-------|----------|
+| `valuation`  | $`\lvert W\rvert \times \lceil \lvert P\rvert/64\rceil`$ words | $V$ as a bit matrix, row per world |
+| `set_of`     | $`\lvert Ag\rvert \times \lvert W\rvert`$ ids | $R_i(w)$ as an index into the set table |
+| `set_begin`, `members` | one offset per set, one entry per member | the distinct successor sets, each a sorted world list |
+| `designated` | $`\lceil \lvert W\rvert/64\rceil`$ words | $`W^*`$ |
 
-and nothing else. Everything the planner does to a model is then a word-level operation over contiguous memory:
+Epistemic models repeat successor sets heavily. On K45 frames — transitive and Euclidean, which covers S5 and KD45 — two successor sets of one agent are either equal or disjoint, so an agent's sets hold at most $\lvert W\rvert$ entries together. Both operations that create models preserve the frame: the product update with K45 event relations (every IεPC observability type — fully, partially, oblivious, deceived — is one) and the bisimulation quotient. The table therefore stays linear in $\lvert W\rvert$ along every search, where a bit matrix costs $\lvert Ag\rvert \cdot \lvert W\rvert^2$ bits: 553 MB for a single 19 210-world state of IεPC hard gossip.
+
+Operations on a model read the table once per distinct set:
 
 - $p$ holds at $w$: one bit test.
-- $R_i(w) \subseteq S$: $\lceil \lvert W\rvert/64\rceil$ ANDNOT tests, *independent of how many successors $w$ has*.
-- copy a model: three `memcpy`s.
-- hash a model: one linear scan, no pointer chasing.
+- $[i]\varphi$: a set qualifies when all its members are in $\mathit{sat}(\varphi)$, decided once per set; each world then reads its set's flag.
+- $C_G\varphi$: a backward worklist from the $\neg\varphi$ worlds, visiting each set and each (agent, world) pair once.
+- copy a model: five `memcpy`s; hash a model: one linear scan.
 
-The previous representation used `std::unordered_set<uint32_t>` for each world's valuation and for each $(\mathit{agent}, \mathit{world})$ accessibility row. For a 512-world, 5-agent model that is roughly 2,600 independent hash tables. Modal evaluation over it was a pointer chase per successor; here it is a register operation per 64 worlds.
+Contracted states intern sets by content in canonical order (§5), so two bisimilar states still produce identical arrays.
 
-The effect is visible in resident memory: on `gossip1` the old representation peaked at **21 GB**, the new one at **7.3 MB**.
+The representation before this one was a bit matrix per agent, and before that `std::unordered_set<uint32_t>` per world and per $(\mathit{agent}, \mathit{world})$ row. The matrix removed pointer chasing (on `gossip1`, 21 GB down to 7.3 MB); the set table removes the quadratic term, which is what limits large gossip tasks with private and deceptive announcements: IεPC intermediate `gos-11-all` went from 12 expansions in 120 s to a solution in 54 s, and hard `gos-12-imp-deceived` from 7 expansions in 120 s to a solution in 7 s.
 
 ### 3.2 Hash-consed formulas
 
@@ -162,22 +165,22 @@ and goal satisfaction is one subset test: $W^* \subseteq \mathit{sat}(\varphi_g)
 
 Three of these clauses replace something structurally worse:
 
-- **Box.** $\mathit{sat}([i]\varphi)$ is one ANDNOT test per world against a set computed once.
-- **Knowing-whether.** Both modal tests are derived from a single extension of $\varphi$.
-- **Common knowledge.** $C_G\varphi$ is computed as a single greatest fixpoint over the whole model rather than one BFS per world.
+- **Box.** $\mathit{sat}([i]\varphi)$ is decided once per distinct successor set of agent $i$; each world then reads its set's flag.
+- **Knowing-whether.** Both modal tests are derived from a single pass over each set against one extension of $\varphi$.
+- **Common knowledge.** $C_G\varphi$ is computed as a single fixpoint over the whole model rather than one BFS per world: its complement is propagated backwards from the $\neg\varphi$ worlds, marking each successor set and each (agent, world) pair once.
 
 ### 4.2 Complexity
 
-Let $n = |W|$, $m = |Ag|$, and $\omega = 64$.
+Let $n = |W|$, $\omega = 64$, and $\sigma_i$ the total size of agent $i$'s distinct successor sets ($\sigma_i \le n$ on K45 frames, $n^2$ in the worst case).
 
 | Subformula | Cost |
 |------------|------|
 | $p$ | $O(n)$ |
 | $`\neg,\ \wedge,\ \vee`$ | $O(n/\omega)$ per child |
-| $`[i]\varphi`$, $`\mathit{Kw}_i\varphi`$ | $`O(n^2/\omega)`$ |
-| $`C_G\varphi`$ | $`O(k \cdot \lvert G\rvert \cdot n^2/\omega)`$, $`k \le n`$ |
+| $`[i]\varphi`$, $`\mathit{Kw}_i\varphi`$ | $`O(n + \sigma_i)`$ |
+| $`C_G\varphi`$ | $`O(\lvert G\rvert \cdot n + \sum_{i \in G} \sigma_i)`$ |
 
-A formula of size $\lvert\varphi\rvert$ over the purely modal fragment therefore costs $O(\lvert\varphi\rvert \cdot n^2/\omega)$ per model, evaluated once and memoised.
+A formula of size $\lvert\varphi\rvert$ therefore costs $O(\lvert\varphi\rvert \cdot (n + \sigma))$ per model on K45 frames — linear in the number of worlds — evaluated once and memoised.
 
 ---
 
@@ -193,7 +196,9 @@ Contraction proceeds in three stages:
 
 1. **Reachability restriction** — worlds not reachable from $W^*$ are removed.
 2. **Ordered partition refinement** — starting from the partition induced by designation and valuation, each round sorts worlds by a key and assigns class identifiers in sorted order.
-3. **Quotient** — class $c$ becomes world $c$ of the result.
+3. **Quotient** — class $c$ becomes world $c$ of the result, and its successor sets — the classes of its representative's successors — are interned by content in (agent, class) order, which numbers the sets canonically as well.
+
+Each refinement round computes, for every distinct successor set $S$, the sorted list $N(S)$ of classes of its members, ranks the distinct lists by (size, contents), and keys each world by its class and the ranks of its agents' sets. The work per round is linear in the table rather than quadratic in $\lvert W\rvert$.
 
 ### 5.3 Canonicity
 
@@ -209,11 +214,11 @@ Three costs dominated the previous implementation and are removed here.
 
 **The $(w,e) \to$ world table is a flat array.** It was an `unordered_map` keyed on a packed 64-bit pair, probed from the innermost loop of the relation construction — once per $(i, w, e, v, f)$ quintuple. The index space is dense and small, so a vector with a sentinel is both smaller and free of hashing.
 
-**Iteration is in index order.** The relation was previously built by iterating the hash map, visiting source worlds in essentially arbitrary order. It now runs in index order, so each source world's accessibility row is read once and stays in cache across that world's events.
+**Successor sets are built once per (set, event row).** The successor set of $(w,e)$ depends only on $R_i(w)$ and on the event row $R^E_i(e)$, so the update builds it once for each distinct pair and points every matching world at it. Worlds are numbered in one block per event, and walking $f \in R^E_i(e)$ and $v \in R_i(w)$ in order visits $\mathit{idx}(v,f)$ in increasing order, so sets come out sorted without sorting.
 
 **Sensing branches share the model.** For a sensing action, the branch for event $e_k$ differs from its siblings only in $`{W'}^*_k = \lbrace (w,e_k) \mid w \in W^* \rbrace`$. All branches are derived from one shared update, which also keeps their world indices mutually coherent — running the update once per event would compact indices independently and leave each branch's designated set referring to different worlds. Branch order is sorted by event index so that the emitted conditional plan is deterministic.
 
-**KD45 repair.** $R_i$ is not serial after a product update: $(w,e)$ is non-serial for $i$ whenever $R_i(w) = \emptyset$ or $R^E_i(e) = \emptyset$, and removal cascades because a removed world may have been another's only successor. The surviving set is the greatest fixpoint of "every agent's row, restricted to survivors, is non-empty", computed by repeated sweeps over the bit matrix; survivors are then compacted and the pair table patched through the remapping.
+**KD45 repair.** $R_i$ is not serial after a product update: $(w,e)$ is non-serial for $i$ whenever $R_i(w) = \emptyset$ or $R^E_i(e) = \emptyset$, and removal cascades because a removed world may have been another's only successor. The surviving set is the greatest fixpoint of "every agent's row, restricted to survivors, is non-empty", computed by repeated sweeps that flag each successor set once; survivors are then compacted and the pair table patched through the remapping.
 
 **Prune reasons are typed.** The update declines to produce a successor for three distinct reasons — the action was inapplicable, the pre-contraction bound $\lvert W\rvert \cdot \lvert E\rvert$ fired, or seriality repair emptied $W^*$ — and only the first is a property of the domain. These were previously collapsed into a bare `std::nullopt`, making it impossible to distinguish a genuinely dead branch from one the planner chose to prune. They are now carried in the result type and counted separately in the statistics.
 

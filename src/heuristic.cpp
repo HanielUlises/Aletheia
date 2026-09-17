@@ -1,5 +1,7 @@
 #include "heuristic.hpp"
 
+#include <unordered_map>
+
 #include <algorithm>
 #include <vector>
 
@@ -37,8 +39,9 @@ using WordVec = std::vector<bits::Word>;
 WordVec project(const EpistemicState& s, bits::ConstWordSpan designated, AgentIdx ag) {
     WordVec out(s.rel_words, 0);
     if (ag >= s.num_agents) return out;
-    bits::for_each(designated,
-                   [&](std::uint32_t w) { bits::or_into(out, s.succ(ag, w)); });
+    bits::for_each(designated, [&](std::uint32_t w) {
+        for (WorldIdx v : s.succ(ag, w)) bits::set(out, v);
+    });
     return out;
 }
 
@@ -52,10 +55,11 @@ float counterexample_ratio(const EpistemicState& s, bits::ConstWordSpan designat
 
     std::size_t fails = 0, sampled = 0;
     bits::for_each_until(designated, [&](std::uint32_t w) {
-        return bits::for_each_until(s.succ(ag, w), [&](std::uint32_t v) {
+        for (WorldIdx v : s.succ(ag, w)) {
             if (!bits::test(ext, v)) ++fails;
-            return ++sampled < kMaxSample;
-        });
+            if (++sampled >= kMaxSample) return false;
+        }
+        return true;
     });
 
     if (sampled == 0) return 0.0f;
@@ -323,6 +327,8 @@ bool relaxed_step(EpistemicState& m, const PlanningTask& task) {
     // Extensions are copied out because several are held live at once and the
     // model is mutated below, which invalidates the state's satisfaction cache.
     std::vector<bits::Word> ext_e, ext_f;
+    std::unordered_map<std::uint32_t, std::uint32_t> cut;
+    std::vector<WorldIdx> buf;
 
     for (const Action& a : task.actions) {
         std::vector<EventIdx> events(a.designated_events.begin(),
@@ -343,10 +349,21 @@ bool relaxed_step(EpistemicState& m, const PlanningTask& task) {
                 for (AgentIdx ag = 0; ag < m.num_agents; ++ag) {
                     if (!distinguishes(a, ag, e, f)) continue;
 
+                    // R_i(w) \ sat(pre(f)), built once per distinct set. The
+                    // cache is left as it is until the end, as before.
+                    cut.clear();
                     bits::for_each(ext_e, [&](std::uint32_t w) {
-                        auto row = m.succ(ag, w);
-                        if (!bits::intersects(row, ext_f)) return;
-                        bits::andnot_into(row, ext_f);
+                        const std::uint32_t id = m.succ_set(ag, w);
+                        auto [it, fresh] = cut.try_emplace(id, id);
+                        if (fresh) {
+                            buf.clear();
+                            for (WorldIdx v : m.set(id))
+                                if (!bits::test(ext_f, v)) buf.push_back(v);
+                            if (buf.size() != m.set(id).size())
+                                it->second = buf.empty() ? 0 : m.add_set(buf);
+                        }
+                        if (it->second == id) return;
+                        m.set_of[std::size_t(ag) * nw + w] = it->second;
                         progress = true;
                     });
                 }

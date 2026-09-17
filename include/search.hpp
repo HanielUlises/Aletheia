@@ -40,9 +40,8 @@ struct PlannerStats {
     std::size_t max_frontier_size{0};
     std::size_t closed_size{0};
 
-    // Bytes of Kripke-model storage held live by the search at its peak. With
-    // the bit-matrix representation this is the planner's dominant allocation,
-    // so it is the number worth reporting.
+    // Bytes of Kripke-model storage held live by the search at its peak: the
+    // planner's dominant allocation, so it is the number worth reporting.
     std::size_t peak_state_bytes{0};
 
     float initial_h{0.f};

@@ -23,9 +23,9 @@
 //
 //     sat(¬φ)     = W \ sat(φ)
 //     sat(φ ∧ ψ)  = sat(φ) ∩ sat(ψ)
-//     sat([i]φ)   = { w : R_i(w) ⊆ sat(φ) }           -- one ANDNOT test/world
-//     sat(Kw_i φ) = sat([i]φ) ∪ sat([i]¬φ)            -- reuses sat(φ) once
-//     sat(C_G φ)  = νX. sat(φ) ∩ { w : R_G(w) ⊆ X }   -- one fixpoint, not one
+//     sat([i]φ)   = { w : R_i(w) ⊆ sat(φ) }           -- one test per set
+//     sat(Kw_i φ) = sat([i]φ) ∪ sat([i]¬φ)            -- same pass, both ways
+//     sat(C_G φ)  = νX. sat(φ) ∩ { w : R_G(w) ⊆ X }   -- one worklist, not one
 //                                                        BFS per world
 //
 // Each subformula is evaluated exactly once per model, and because formulas are
@@ -133,21 +133,11 @@ private:
         }
 
         case FormulaKind::Kw: {
-            // [i]φ ∨ [i]¬φ from a single extension of φ. The old evaluator
-            // called holds_at(φ, v) twice per accessible world here.
-            const std::uint32_t c = resolve(*f.children[0]);
-
-            const std::uint32_t neg = alloc();
-            bits::complement_into(at(neg), cat(c), nw_);
-
+            // [i]φ ∨ [i]¬φ from a single extension of φ: a set qualifies when
+            // its members all agree on φ.
+            const std::uint32_t c   = resolve(*f.children[0]);
             const std::uint32_t out = alloc();
-            if (f.agent < s_.num_agents) {
-                box_into(at(out), cat(c), f.agent);
-
-                std::vector<bits::Word> other(rw_, 0);
-                box_into(other, cat(neg), f.agent);
-                bits::or_into(at(out), other);
-            }
+            if (f.agent < s_.num_agents) kw_into(at(out), cat(c), f.agent);
             return out;
         }
 
@@ -155,47 +145,139 @@ private:
             // Greatest fixpoint of X ↦ sat(φ) ∩ { w : ∀i∈G. R_i(w) ⊆ X }.
             //
             // w belongs to the fixpoint exactly when φ holds at every world
-            // reachable from w by the reflexive-transitive closure of ⋃_{i∈G} R_i
-            // — the semantics the per-world BFS implemented, but converging in
-            // at most |W| passes over the whole model rather than running one
-            // search per world.
+            // reachable from w by the reflexive-transitive closure of ⋃_{i∈G} R_i.
+            // Its complement is the least fixpoint of
+            //
+            //     Y ↦ ¬sat(φ) ∪ { w : ∃i∈G. R_i(w) ∩ Y ≠ ∅ },
+            //
+            // computed backwards from the ¬φ worlds: a world entering Y marks
+            // every G-set containing it, and a set marked once adds every world
+            // pointing at it. Each set and each (agent, world) pair is visited
+            // once.
             const std::uint32_t c   = resolve(*f.children[0]);
             const std::uint32_t out = alloc();
-
-            bits::fill_all(at(out), nw_);
-
-            std::vector<bits::Word> next(rw_, 0);
-            for (;;) {
-                bits::copy_from(next, cat(c));
-                for (WorldIdx w = 0; w < nw_; ++w) {
-                    if (!bits::test(next, w)) continue;
-                    for (AgentIdx ag : f.group) {
-                        if (ag >= s_.num_agents) continue;
-                        if (!bits::subset_of(s_.succ(ag, w), cat(out))) {
-                            bits::reset(next, w);
-                            break;
-                        }
-                    }
-                }
-                if (bits::equal(next, cat(out))) break;
-                bits::copy_from(at(out), next);
-            }
+            common_into(at(out), cat(c), f.group);
             return out;
         }
         }
         return alloc();   // unreachable
     }
 
+    // Per-set flags, computed only for the sets agent `ag` points at.
+    struct Flags {
+        std::vector<std::uint32_t> stamp;
+        std::vector<std::uint8_t>  in, out;   // all members in src / none in src
+        std::uint32_t              token{0};
+    };
+
+    static Flags& flags(std::uint32_t num_sets) {
+        thread_local Flags fl;
+        if (fl.stamp.size() < num_sets) {
+            fl.stamp.assign(num_sets, 0);
+            fl.in.resize(num_sets);
+            fl.out.resize(num_sets);
+            fl.token = 0;
+        }
+        if (++fl.token == 0) {
+            std::fill(fl.stamp.begin(), fl.stamp.end(), 0);
+            fl.token = 1;
+        }
+        return fl;
+    }
+
+    void classify(Flags& fl, std::uint32_t id, bits::ConstWordSpan src) const {
+        fl.stamp[id] = fl.token;
+        bool all = true, none = true;
+        for (WorldIdx v : s_.set(id)) {
+            if (bits::test(src, v)) none = false;
+            else                    all  = false;
+            if (!all && !none) break;
+        }
+        fl.in[id]  = all;
+        fl.out[id] = none;
+    }
+
     // dst := { w : R_ag(w) ⊆ src }
     void box_into(bits::WordSpan dst, bits::ConstWordSpan src, AgentIdx ag) const {
+        Flags& fl = flags(s_.num_sets());
         for (WorldIdx w = 0; w < nw_; ++w) {
-            const auto row = s_.succ(ag, w);
-            bool all = true;
-            for (std::uint32_t i = 0; i < rw_; ++i) {
-                if (row[i] & ~src[i]) { all = false; break; }
-            }
-            if (all) bits::set(dst, w);
+            const std::uint32_t id = s_.succ_set(ag, w);
+            if (fl.stamp[id] != fl.token) classify(fl, id, src);
+            if (fl.in[id]) bits::set(dst, w);
         }
+    }
+
+    // dst := { w : R_ag(w) ⊆ src or R_ag(w) ∩ src = ∅ }
+    void kw_into(bits::WordSpan dst, bits::ConstWordSpan src, AgentIdx ag) const {
+        Flags& fl = flags(s_.num_sets());
+        for (WorldIdx w = 0; w < nw_; ++w) {
+            const std::uint32_t id = s_.succ_set(ag, w);
+            if (fl.stamp[id] != fl.token) classify(fl, id, src);
+            if (fl.in[id] || fl.out[id]) bits::set(dst, w);
+        }
+    }
+
+    void common_into(bits::WordSpan dst, bits::ConstWordSpan src,
+                     const std::vector<AgentIdx>& group) const {
+        const std::uint32_t ns = s_.num_sets();
+
+        thread_local std::vector<AgentIdx>      agents;
+        thread_local std::vector<std::uint32_t> user_begin, users, cont_begin, cont, fill;
+        thread_local std::vector<std::uint8_t>  used, hit;
+        thread_local std::vector<WorldIdx>      queue;
+        thread_local std::vector<bits::Word>    bad;
+
+        agents.clear();
+        for (AgentIdx ag : group)
+            if (ag < s_.num_agents) agents.push_back(ag);
+
+        // users(S): worlds pointing at S through a G-agent.
+        user_begin.assign(std::size_t(ns) + 1, 0);
+        used.assign(ns, 0);
+        for (AgentIdx ag : agents)
+            for (WorldIdx w = 0; w < nw_; ++w) {
+                const std::uint32_t id = s_.succ_set(ag, w);
+                ++user_begin[id + 1];
+                used[id] = 1;
+            }
+        for (std::uint32_t i = 0; i < ns; ++i) user_begin[i + 1] += user_begin[i];
+        users.resize(user_begin[ns]);
+        fill.assign(user_begin.begin(), user_begin.end() - 1);
+        for (AgentIdx ag : agents)
+            for (WorldIdx w = 0; w < nw_; ++w) users[fill[s_.succ_set(ag, w)]++] = w;
+
+        // containing(v): G-sets with v as a member.
+        cont_begin.assign(std::size_t(nw_) + 1, 0);
+        for (std::uint32_t id = 0; id < ns; ++id)
+            if (used[id])
+                for (WorldIdx v : s_.set(id)) ++cont_begin[v + 1];
+        for (WorldIdx v = 0; v < nw_; ++v) cont_begin[v + 1] += cont_begin[v];
+        cont.resize(cont_begin[nw_]);
+        fill.assign(cont_begin.begin(), cont_begin.end() - 1);
+        for (std::uint32_t id = 0; id < ns; ++id)
+            if (used[id])
+                for (WorldIdx v : s_.set(id)) cont[fill[v]++] = id;
+
+        bad.assign(rw_, 0);
+        bits::complement_into(bad, src, nw_);
+        queue.clear();
+        bits::for_each(bad, [&](std::uint32_t w) { queue.push_back(w); });
+        hit.assign(ns, 0);
+        for (std::size_t q = 0; q < queue.size(); ++q) {
+            const WorldIdx y = queue[q];
+            for (std::uint32_t k = cont_begin[y]; k < cont_begin[y + 1]; ++k) {
+                const std::uint32_t id = cont[k];
+                if (hit[id]) continue;
+                hit[id] = 1;
+                for (std::uint32_t u = user_begin[id]; u < user_begin[id + 1]; ++u) {
+                    const WorldIdx w = users[u];
+                    if (bits::test(bad, w)) continue;
+                    bits::set(bad, w);
+                    queue.push_back(w);
+                }
+            }
+        }
+        bits::complement_into(dst, bad, nw_);
     }
 };
 
@@ -208,14 +290,15 @@ EpistemicState::EpistemicState() = default;
 EpistemicState::EpistemicState(const EpistemicState& o)
     : num_worlds(o.num_worlds), num_atoms(o.num_atoms), num_agents(o.num_agents),
       val_words(o.val_words), rel_words(o.rel_words),
-      valuation(o.valuation), relation(o.relation), designated(o.designated),
-      fp_(o.fp_) {}
+      valuation(o.valuation), set_of(o.set_of), set_begin(o.set_begin),
+      members(o.members), designated(o.designated), fp_(o.fp_) {}
 
 EpistemicState& EpistemicState::operator=(const EpistemicState& o) {
     if (this == &o) return *this;
     num_worlds = o.num_worlds; num_atoms = o.num_atoms; num_agents = o.num_agents;
     val_words  = o.val_words;  rel_words = o.rel_words;
-    valuation  = o.valuation;  relation  = o.relation;  designated = o.designated;
+    valuation  = o.valuation;  set_of    = o.set_of;    set_begin  = o.set_begin;
+    members    = o.members;    designated = o.designated;
     cache_.reset();
     fp_ = o.fp_;
     return *this;
@@ -228,7 +311,8 @@ EpistemicState& EpistemicState::operator=(const EpistemicState& o) {
 EpistemicState::EpistemicState(EpistemicState&& o) noexcept
     : num_worlds(o.num_worlds), num_atoms(o.num_atoms), num_agents(o.num_agents),
       val_words(o.val_words), rel_words(o.rel_words),
-      valuation(std::move(o.valuation)), relation(std::move(o.relation)),
+      valuation(std::move(o.valuation)), set_of(std::move(o.set_of)),
+      set_begin(std::move(o.set_begin)), members(std::move(o.members)),
       designated(std::move(o.designated)), fp_(o.fp_) {
     o.cache_.reset();
 }
@@ -238,7 +322,9 @@ EpistemicState& EpistemicState::operator=(EpistemicState&& o) noexcept {
     num_worlds = o.num_worlds; num_atoms = o.num_atoms; num_agents = o.num_agents;
     val_words  = o.val_words;  rel_words = o.rel_words;
     valuation  = std::move(o.valuation);
-    relation   = std::move(o.relation);
+    set_of     = std::move(o.set_of);
+    set_begin  = std::move(o.set_begin);
+    members    = std::move(o.members);
     designated = std::move(o.designated);
     cache_.reset();
     o.cache_.reset();
@@ -257,9 +343,61 @@ void EpistemicState::allocate(std::uint32_t worlds, std::uint32_t atoms,
     rel_words  = static_cast<std::uint32_t>(bits::words_for(worlds));
 
     valuation.assign(std::size_t(worlds) * val_words, 0);
-    relation.assign(std::size_t(agents) * worlds * rel_words, 0);
+    set_of.assign(std::size_t(agents) * worlds, 0);
+    set_begin.assign(2, 0);
+    members.clear();
     designated.assign(rel_words, 0);
     invalidate();
+}
+
+std::uint32_t EpistemicState::add_set(std::span<const WorldIdx> sorted_members) {
+    members.insert(members.end(), sorted_members.begin(), sorted_members.end());
+    set_begin.push_back(static_cast<std::uint32_t>(members.size()));
+    return static_cast<std::uint32_t>(set_begin.size() - 2);
+}
+
+namespace {
+
+std::uint64_t content_hash(std::span<const WorldIdx> xs) noexcept {
+    std::uint64_t h = bits::mix64(0x9E3779B97F4A7C15ULL ^ xs.size());
+    std::size_t i = 0;
+    for (; i + 1 < xs.size(); i += 2)
+        h = bits::mix64(h ^ ((std::uint64_t(xs[i]) << 32) | xs[i + 1]));
+    if (i < xs.size()) h = bits::mix64(h ^ xs[i]);
+    return h;
+}
+
+} // namespace
+
+SetInterner::SetInterner(EpistemicState& s) : s_(s) {
+    for (std::uint32_t id = 0; id < s_.num_sets(); ++id) {
+        next_.push_back(UINT32_MAX);
+        auto [it, fresh] = first_.try_emplace(content_hash(s_.set(id)), id);
+        if (!fresh) {
+            std::uint32_t k = it->second;
+            while (next_[k] != UINT32_MAX) k = next_[k];
+            next_[k] = id;
+        }
+    }
+}
+
+std::uint32_t SetInterner::intern(std::span<const WorldIdx> sorted_members) {
+    const std::uint64_t h = content_hash(sorted_members);
+    auto it = first_.find(h);
+    std::uint32_t last = UINT32_MAX;
+    if (it != first_.end()) {
+        for (std::uint32_t k = it->second; k != UINT32_MAX; k = next_[k]) {
+            const auto m = s_.set(k);
+            if (std::equal(m.begin(), m.end(), sorted_members.begin(), sorted_members.end()))
+                return k;
+            last = k;
+        }
+    }
+    const std::uint32_t id = s_.add_set(sorted_members);
+    next_.push_back(UINT32_MAX);
+    if (last == UINT32_MAX) first_.emplace(h, id);
+    else                    next_[last] = id;
+    return id;
 }
 
 void EpistemicState::invalidate() const noexcept {
@@ -306,9 +444,18 @@ Fingerprint EpistemicState::fingerprint() const {
         h2 = bits::mix64((h2 + w) * 0x9E3779B97F4A7C15ULL);
     };
 
+    const auto absorb32 = [&](const std::vector<std::uint32_t>& xs) noexcept {
+        std::size_t i = 0;
+        for (; i + 1 < xs.size(); i += 2) absorb((std::uint64_t(xs[i]) << 32) | xs[i + 1]);
+        if (i < xs.size()) absorb(xs[i]);
+        absorb(xs.size());
+    };
+
     for (bits::Word w : valuation)  absorb(w);
     absorb(0xA5A5A5A5A5A5A5A5ULL);          // domain separator between arrays
-    for (bits::Word w : relation)   absorb(w);
+    absorb32(set_of);
+    absorb32(set_begin);
+    absorb32(members);
     absorb(0x5A5A5A5A5A5A5A5AULL);
     for (bits::Word w : designated) absorb(w);
 
@@ -323,7 +470,8 @@ std::size_t EpistemicState::hash() const {
 bool EpistemicState::operator==(const EpistemicState& o) const noexcept {
     return num_worlds == o.num_worlds && num_atoms == o.num_atoms &&
            num_agents == o.num_agents &&
-           valuation  == o.valuation  && relation == o.relation &&
+           valuation  == o.valuation  && set_of == o.set_of &&
+           set_begin  == o.set_begin  && members == o.members &&
            designated == o.designated;
 }
 
@@ -336,41 +484,24 @@ CompactState CompactState::from(const EpistemicState& s) {
     c.num_agents = s.num_agents;
     c.valuation  = s.valuation;
     c.designated = s.designated;
-    c.row_of.resize(std::size_t(s.num_agents) * s.num_worlds);
-
-    const std::uint32_t rw = s.rel_words;
-    std::unordered_map<bits::Word, std::vector<std::uint32_t>> index;
-    for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
-        for (WorldIdx w = 0; w < s.num_worlds; ++w) {
-            const auto row = s.succ(ag, w);
-            bits::Word h = 0;
-            for (bits::Word x : row) h = bits::mix64(h ^ x);
-            auto& cands = index[h];
-            std::uint32_t id = UINT32_MAX;
-            for (std::uint32_t k : cands)
-                if (std::equal(row.begin(), row.end(), c.rows.begin() + std::size_t(k) * rw)) { id = k; break; }
-            if (id == UINT32_MAX) {
-                id = static_cast<std::uint32_t>(c.rows.size() / (rw ? rw : 1));
-                c.rows.insert(c.rows.end(), row.begin(), row.end());
-                cands.push_back(id);
-            }
-            c.row_of[std::size_t(ag) * s.num_worlds + w] = id;
-        }
-    }
+    c.set_of     = s.set_of;
+    c.set_begin  = s.set_begin;
+    c.members    = s.members;
     return c;
 }
 
 EpistemicState CompactState::expand() const {
     EpistemicState s;
-    s.allocate(num_worlds, num_atoms, num_agents);
+    s.num_worlds = num_worlds;
+    s.num_atoms  = num_atoms;
+    s.num_agents = num_agents;
+    s.val_words  = static_cast<std::uint32_t>(bits::words_for(num_atoms));
+    s.rel_words  = static_cast<std::uint32_t>(bits::words_for(num_worlds));
     s.valuation  = valuation;
     s.designated = designated;
-    const std::uint32_t rw = s.rel_words;
-    for (AgentIdx ag = 0; ag < num_agents; ++ag)
-        for (WorldIdx w = 0; w < num_worlds; ++w) {
-            const std::size_t k = row_of[std::size_t(ag) * num_worlds + w];
-            std::copy_n(rows.begin() + k * rw, rw, s.succ(ag, w).begin());
-        }
+    s.set_of     = set_of;
+    s.set_begin  = set_begin;
+    s.members    = members;
     s.invalidate();
     return s;
 }
@@ -388,20 +519,27 @@ EpistemicState restrict_state(const EpistemicState& s,
     });
 
     EpistemicState out;
-    out.allocate(static_cast<std::uint32_t>(survivors.size()),
-                 s.num_atoms, s.num_agents);
+    const auto nw = static_cast<std::uint32_t>(survivors.size());
+    out.allocate(nw, s.num_atoms, s.num_agents);
 
-    for (std::size_t nw = 0; nw < survivors.size(); ++nw)
-        bits::copy_from(out.val(static_cast<WorldIdx>(nw)), s.val(survivors[nw]));
+    for (std::size_t w = 0; w < survivors.size(); ++w)
+        bits::copy_from(out.val(static_cast<WorldIdx>(w)), s.val(survivors[w]));
 
-    for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
-        for (std::size_t nw = 0; nw < survivors.size(); ++nw) {
-            auto dst = out.succ(ag, static_cast<WorldIdx>(nw));
-            bits::for_each(s.succ(ag, survivors[nw]), [&](std::uint32_t v) {
-                if (remap[v] != kNoWorld) bits::set(dst, remap[v]);
-            });
+    // Remapping is monotone, so filtered sets stay sorted. A set is rewritten
+    // once however many worlds point at it.
+    std::vector<std::uint32_t> new_id(s.num_sets(), UINT32_MAX);
+    std::vector<WorldIdx> buf;
+    for (AgentIdx ag = 0; ag < s.num_agents; ++ag)
+        for (WorldIdx w = 0; w < nw; ++w) {
+            const std::uint32_t id = s.succ_set(ag, survivors[w]);
+            if (new_id[id] == UINT32_MAX) {
+                buf.clear();
+                for (WorldIdx v : s.set(id))
+                    if (remap[v] != kNoWorld) buf.push_back(remap[v]);
+                new_id[id] = buf.empty() ? 0 : out.add_set(buf);
+            }
+            out.set_of[std::size_t(ag) * nw + w] = new_id[id];
         }
-    }
 
     auto des = out.designated_bits();
     bits::for_each(s.designated_bits(), [&](std::uint32_t w) {
@@ -437,9 +575,7 @@ void EpistemicState::print(const std::vector<std::string>& atom_names,
             (ag < agent_names.size()) ? agent_names[ag] : std::to_string(ag);
         std::cout << "  R_" << aname << ": ";
         for (WorldIdx w = 0; w < num_worlds; ++w)
-            bits::for_each(succ(ag, w), [&](std::uint32_t v) {
-                std::cout << w << "->" << v << " ";
-            });
+            for (WorldIdx v : succ(ag, w)) std::cout << w << "->" << v << " ";
         std::cout << "\n";
     }
 }

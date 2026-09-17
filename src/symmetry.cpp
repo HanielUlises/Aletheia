@@ -161,10 +161,12 @@ EpistemicState rename(const EpistemicState& s, const AgentSymmetry::Swap& sw) {
         auto dst = out.val(w);
         bits::for_each(s.val(w), [&](std::uint32_t p) { bits::set(dst, sw.atom[p]); });
     }
+    out.set_begin = s.set_begin;
+    out.members   = s.members;
     for (AgentIdx ag = 0; ag < s.num_agents; ++ag) {
         const AgentIdx to = ag == sw.a ? sw.b : ag == sw.b ? sw.a : ag;
-        for (WorldIdx w = 0; w < s.num_worlds; ++w)
-            bits::copy_from(out.succ(to, w), s.succ(ag, w));
+        std::copy_n(s.set_of.begin() + std::size_t(ag) * s.num_worlds, s.num_worlds,
+                    out.set_of.begin() + std::size_t(to) * s.num_worlds);
     }
     bits::copy_from(out.designated_bits(), s.designated_bits());
     out.invalidate();
@@ -255,7 +257,7 @@ StateSymmetry stabiliser(const AgentSymmetry& sym, const EpistemicState& s) {
     std::vector<std::uint64_t> row_sig(na, 0);
     for (AgentIdx ag = 0; ag < na; ++ag)
         for (WorldIdx w = 0; w < s.num_worlds; ++w)
-            row_sig[ag] += bits::mix64(bits::count(s.succ(ag, w)) + 1);
+            row_sig[ag] += bits::mix64(s.succ(ag, w).size() + 1);
 
     std::vector<std::uint32_t> column(s.num_atoms, 0);
     for (WorldIdx w = 0; w < s.num_worlds; ++w)

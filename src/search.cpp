@@ -106,8 +106,9 @@ void build_successor(const EpistemicState& parent, const Action& action,
     out.state = EpistemicState{};
 }
 
-// Successors built at once without exceeding half the free memory: a product
-// update materialises up to (|W|·|E|)² bits per agent before contraction.
+// Successors built at once without exceeding half the free memory. A product
+// update keeps |W|·|E| worlds before contraction; bound its set table by one
+// successor list of every world per agent, plus contraction's working keys.
 std::size_t parallel_batch(const EpistemicState& s, const PlanningTask& task) {
     static std::size_t max_events = [&] {
         std::size_t m = 1;
@@ -115,7 +116,8 @@ std::size_t parallel_batch(const EpistemicState& s, const PlanningTask& task) {
         return m;
     }();
     const double worlds = double(s.num_worlds) * double(max_events);
-    const double bytes  = 2.0 * worlds * worlds / 8.0 * double(std::max<std::uint32_t>(1, s.num_agents));
+    const double per_world = double(s.members.size()) / double(std::max<std::uint32_t>(1, s.num_worlds)) + 1.0;
+    const double bytes  = 4.0 * worlds * double(std::max<std::uint32_t>(1, s.num_agents)) * (per_world + 4.0) * 3.0;
     const double avail  = 0.5 * double(sysconf(_SC_AVPHYS_PAGES)) * double(sysconf(_SC_PAGESIZE));
     const double batch  = bytes > 0 ? avail / bytes : double(par::threads());
     return std::size_t(std::clamp(batch, 1.0, double(par::threads())));
