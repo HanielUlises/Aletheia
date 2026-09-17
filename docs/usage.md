@@ -23,6 +23,37 @@ LTO, then strip; both matter for the figures in [evaluation.md](evaluation.md).
 
 An Apptainer definition for the competition image is in `Apptainer.aletheia`.
 
+### As a library
+
+The same build also produces `libaletheia.a`, the planning core without
+`main.cpp`, for programs that search in process.
+[ePlanSys](https://github.com/ePlanSys/eplansys) is one: its ROS 2 plan
+solver links it rather than keeping a copy of the sources. Install it and find
+it by name:
+
+```sh
+cmake --install build --prefix <prefix>
+```
+
+```cmake
+find_package(aletheia 0.2 REQUIRED)
+target_link_libraries(my_target PRIVATE aletheia::aletheia)
+```
+
+Headers are included as `<aletheia/search.hpp>`. `strategy.hpp` turns the
+labels the selection policy speaks in into heuristics and strategies, so a
+program that honours the policy can build every choice it makes.
+
+The library is compiled without `-march=native` and without LTO, whatever
+`ALETHEIA_NATIVE` says, because both would leak into the program linking it:
+`bitset.hpp` inlines a different `pext_word` under BMI2, and an archive of slim
+LTO objects does not link into a program built without LTO. The binary keeps
+both. `-DALETHEIA_LIBRARY=OFF` skips the library.
+
+`package.xml` makes the checkout a colcon package, so a ROS 2 workspace builds
+it from source like any other, and the installed `epistemic_planner` is on
+`PATH` once the workspace is sourced.
+
 ## Running
 
 ```sh
