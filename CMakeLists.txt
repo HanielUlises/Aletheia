@@ -30,6 +30,7 @@ set(SOURCES
     src/replan.cpp
     src/portfolio.cpp
     src/signature.cpp
+    src/strategy.cpp
     src/symmetry.cpp
     src/parallel.cpp
     src/validator.cpp
