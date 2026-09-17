@@ -23,6 +23,9 @@ struct PlanningTask {
     // repair rejects belief-contradicting events such as deception.
     bool kd45_repair = false;
 
+    // GBFS expands the heuristic's preferred actions first.
+    bool helpful_actions = true;
+
     [[nodiscard]] bool repair_seriality() const noexcept { return kd45 && kd45_repair; }
 
     // True iff at least one action has agents with heterogeneous observability

@@ -135,6 +135,7 @@ static void usage(const char* prog) {
         << "  --no-symmetry  Disable agent-symmetry pruning\n"
         << "  --kd45-repair  Delete non-serial worlds after KD45 updates\n"
         << "  --no-portfolio Auto-selected AO* keeps the whole budget\n"
+        << "  --no-helpful   GBFS expands every action, not preferred ones first\n"
         << "  --threads      Worker threads (default: all cores; 1 = serial)\n"
         << "  --help         Show this message\n";
 }
@@ -155,6 +156,7 @@ int main(int argc, char* argv[]) {
     bool symmetry     = true;
     bool kd45_repair  = false;
     bool portfolio_on = true;
+    bool helpful_on   = true;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -174,6 +176,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--no-symmetry")  symmetry          = false;
         else if (arg == "--kd45-repair")  kd45_repair       = true;
         else if (arg == "--no-portfolio") portfolio_on      = false;
+        else if (arg == "--no-helpful")   helpful_on        = false;
         else if (arg == "--threads"   && i+1 < argc) par::set_threads(std::stoul(argv[++i]));
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
@@ -213,7 +216,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    task.kd45_repair = kd45_repair;
+    task.kd45_repair     = kd45_repair;
+    task.helpful_actions = helpful_on;
     const TaskFeatures features = TaskFeatures::extract(task);
 
     if (symmetry) {

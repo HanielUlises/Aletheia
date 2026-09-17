@@ -29,6 +29,10 @@ public:
 
     float operator()(const EpistemicState& s, const PlanningTask& task) const override;
 
+    // Applicable actions of a relaxed plan extracted from the cost fixpoint.
+    bool preferred(const EpistemicState& s, const PlanningTask& task,
+                   std::vector<ActionIdx>& out) const override;
+
 private:
     enum class Kind : std::uint8_t { True, False, Fact, And, Or };
 
@@ -41,6 +45,7 @@ private:
     struct Op {
         std::uint32_t pre{0};              // requirement
         std::uint32_t begin{0}, end{0};    // added facts, into op_adds_
+        ActionIdx     action{0};
     };
 
     std::uint32_t compile(const FormulaPtr& f, bool negated);
@@ -48,6 +53,12 @@ private:
     std::uint32_t node(Kind k, std::vector<std::uint32_t> children);
     void          add_op(std::uint32_t pre, const std::vector<std::uint32_t>& adds);
     void          prune();
+    // Cost fixpoint at s; supporter[f] is the operator giving fact f its cost,
+    // or -1 when initial or derived.
+    void          costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
+                        std::vector<std::int32_t>& rc, std::vector<std::int32_t>* supporter) const;
+
+    ActionIdx     current_action_{0};
 
     std::vector<Req>           reqs_;
     std::vector<std::uint32_t> req_children_;
