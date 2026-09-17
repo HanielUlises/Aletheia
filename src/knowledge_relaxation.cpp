@@ -1,6 +1,7 @@
 #include "knowledge_relaxation.hpp"
 
 #include <algorithm>
+#include <map>
 
 namespace {
 
@@ -66,6 +67,20 @@ std::uint32_t KnowledgeRelaxationHeuristic::fact(const FormulaPtr& f) {
     facts_.push_back(f);
     derived_.push_back(-1);
 
+    if (f->kind == FormulaKind::Belief && f->children[0]->kind == FormulaKind::Kw &&
+        is_literal(*f->children[0]->children[0])) {
+        const AgentIdx   i = f->agent, j = f->children[0]->agent;
+        const FormulaPtr& p = f->children[0]->children[0];
+        const FormulaPtr  q = p->kind == FormulaKind::Not ? p->children[0] : Formula::make_not(p);
+        const std::uint32_t pos = fact(Formula::make_belief(i, Formula::make_belief(j, p)));
+        const std::uint32_t neg = fact(Formula::make_belief(i, Formula::make_belief(j, q)));
+        Req a{Kind::Fact, pos, 0, 0}, b{Kind::Fact, neg, 0, 0};
+        reqs_.push_back(a);
+        const auto ra = static_cast<std::uint32_t>(reqs_.size() - 1);
+        reqs_.push_back(b);
+        const auto rb = static_cast<std::uint32_t>(reqs_.size() - 1);
+        derived_[idx] = static_cast<std::int32_t>(node(Kind::Or, {ra, rb}));
+    }
     if (f->kind == FormulaKind::Kw && is_literal(*f->children[0])) {
         const FormulaPtr& p = f->children[0];
         const std::uint32_t pos = fact(Formula::make_belief(f->agent, p));
@@ -130,10 +145,59 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
     else
         goal_.push_back(compile(g, false));
 
+    // First pass: compile every precondition and observability condition, so
+    // the nested facts [i][j]ℓ the task mentions are known before operators
+    // are built.
+    for (const Action& a : task.actions) {
+        for (EventIdx e : a.designated_events)
+            if (e < a.events.size()) compile(a.events[e].precondition, false);
+        for (const auto& cases : a.obs_cases)
+            for (const ObsCase& c : cases) compile(c.condition, false);
+    }
+    std::map<std::pair<AgentIdx, AgentIdx>, std::vector<std::uint32_t>> nested;   // (i, j) → literal ids
+    for (const FormulaPtr& f : facts_)
+        if (f->kind == FormulaKind::Belief && f->children[0]->kind == FormulaKind::Belief &&
+            is_literal(*f->children[0]->children[0]))
+            nested[{f->agent, f->children[0]->agent}].push_back(f->children[0]->children[0]->id);
+
     for (const Action& a : task.actions) {
         const std::size_t ne = a.events.size();
         std::vector<std::vector<FormulaPtr>> after(ne);
         for (std::size_t e = 0; e < ne; ++e) after[e] = after_literals(a.events[e]);
+
+        std::vector<bits::Word> all_events(bits::words_for(ne), 0);
+        bits::fill_all(all_events, ne);
+
+        // Literals holding after every event in `row`.
+        const auto common_after = [&](const std::vector<EventIdx>& row) {
+            std::vector<FormulaPtr> common;
+            bool first = true;
+            for (EventIdx f : row) {
+                if (f >= ne) continue;
+                if (first) { common = after[f]; first = false; continue; }
+                std::vector<FormulaPtr> keep;
+                std::set_intersection(common.begin(), common.end(), after[f].begin(), after[f].end(),
+                                      std::back_inserter(keep),
+                                      [](auto& x, auto& y) { return x->id < y->id; });
+                common.swap(keep);
+            }
+            return common;
+        };
+        const auto events_in = [&](bits::ConstWordSpan row) {
+            std::vector<EventIdx> out;
+            bits::for_each(row, [&](std::uint32_t f) { out.push_back(f); });
+            return out;
+        };
+        // (condition requirement, event row) per observability case of agent j.
+        const auto obs_of = [&](AgentIdx j, EventIdx e) {
+            std::vector<std::pair<std::uint32_t, std::vector<EventIdx>>> out;
+            if (j >= a.obs_cases.size() || a.obs_cases[j].empty())
+                out.emplace_back(node(Kind::True, {}), events_in(all_events));
+            else
+                for (const ObsCase& c : a.obs_cases[j])
+                    out.emplace_back(compile(c.condition, false), events_in(c.event_row(e)));
+            return out;
+        };
 
         for (EventIdx e : a.designated_events) {
             if (e >= ne) continue;
@@ -154,34 +218,45 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
             add_op(pre, ontic);
 
             for (AgentIdx j = 0; j < task.num_agents(); ++j) {
-                const auto learned_from = [&](bits::ConstWordSpan row) {
-                    std::vector<FormulaPtr> common;
-                    bool first = true;
-                    bits::for_each(row, [&](std::uint32_t f) {
-                        if (f >= ne) return;
-                        if (first) { common = after[f]; first = false; return; }
-                        std::vector<FormulaPtr> keep;
-                        std::set_intersection(common.begin(), common.end(),
-                                              after[f].begin(), after[f].end(),
-                                              std::back_inserter(keep),
-                                              [](auto& x, auto& y) { return x->id < y->id; });
-                        common.swap(keep);
-                    });
+                for (const auto& [cond, row] : obs_of(j, e)) {
                     std::vector<std::uint32_t> gains;
-                    for (const auto& l : common) gains.push_back(fact(Formula::make_belief(j, l)));
-                    return gains;
-                };
-
-                if (j >= a.obs_cases.size() || a.obs_cases[j].empty()) {
-                    std::vector<bits::Word> all(bits::words_for(ne), 0);
-                    bits::fill_all(all, ne);
-                    add_op(pre, learned_from(all));
-                    continue;
+                    for (const auto& l : common_after(row))
+                        gains.push_back(fact(Formula::make_belief(j, l)));
+                    add_op(node(Kind::And, {pre, cond}), gains);
                 }
-                for (const ObsCase& c : a.obs_cases[j]) {
-                    auto gains = learned_from(c.event_row(e));
-                    if (!gains.empty())
-                        add_op(node(Kind::And, {pre, compile(c.condition, false)}), gains);
+            }
+
+            // [i][j]ℓ: in every event i cannot tell from e, j sees only events
+            // after which ℓ holds. Built only for the triples the task mentions.
+            for (const auto& [ij, lits] : nested) {
+                const auto [i, j] = ij;
+                for (const auto& [ci, row_i] : obs_of(i, e)) {
+                    if (row_i.empty()) continue;
+                    for (std::size_t k = 0; k < (j < a.obs_cases.size() && !a.obs_cases[j].empty()
+                                                     ? a.obs_cases[j].size() : 1); ++k) {
+                        std::vector<FormulaPtr> common;
+                        bool first = true, empty_row = false;
+                        std::uint32_t cj = 0;
+                        for (EventIdx f : row_i) {
+                            if (f >= ne) continue;
+                            const auto cases = obs_of(j, f);
+                            cj = cases[k].first;
+                            if (cases[k].second.empty()) { empty_row = true; break; }
+                            auto c = common_after(cases[k].second);
+                            if (first) { common.swap(c); first = false; continue; }
+                            std::vector<FormulaPtr> keep;
+                            std::set_intersection(common.begin(), common.end(), c.begin(), c.end(),
+                                                  std::back_inserter(keep),
+                                                  [](auto& x, auto& y) { return x->id < y->id; });
+                            common.swap(keep);
+                        }
+                        if (first || empty_row) continue;
+                        std::vector<std::uint32_t> gains;
+                        for (const auto& l : common)
+                            if (std::find(lits.begin(), lits.end(), l->id) != lits.end())
+                                gains.push_back(fact(Formula::make_belief(i, Formula::make_belief(j, l))));
+                        add_op(node(Kind::And, {pre, ci, cj}), gains);
+                    }
                 }
             }
         }
