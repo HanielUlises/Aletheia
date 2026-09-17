@@ -1,4 +1,5 @@
 #pragma once
+#include "search.hpp"
 #include "task.hpp"
 
 #include <vector>
@@ -24,7 +25,9 @@ struct AgentSymmetry {
     // Agents named in each action, in order of first appearance.
     std::vector<std::vector<AgentIdx>> action_agents;
 
-    [[nodiscard]] static AgentSymmetry detect(const PlanningTask& task);
+    // Swaps verified before `deadline`; later ones are not tried.
+    [[nodiscard]] static AgentSymmetry detect(const PlanningTask& task,
+                                              Deadline deadline = Deadline::max());
     [[nodiscard]] bool empty() const noexcept { return swaps.empty(); }
 };
 

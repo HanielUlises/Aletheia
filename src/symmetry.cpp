@@ -36,121 +36,153 @@ std::optional<std::string> swap_tokens(const std::string& name,
     return out;
 }
 
-// Structural hash invariant under reordering of ∧ / ∨ children, after renaming.
-std::uint64_t hash(const Formula& f, const AgentSymmetry::Swap* s) {
-    const auto ag = [&](AgentIdx x) {
-        return !s ? x : x == s->a ? s->b : x == s->b ? s->a : x;
-    };
-    std::uint64_t h = bits::mix64(static_cast<std::uint64_t>(f.kind) + 1);
-    switch (f.kind) {
-        case FormulaKind::Atom:
-            return bits::mix64(h ^ (s ? s->atom[f.atom] : f.atom));
-        case FormulaKind::Belief:
-        case FormulaKind::Kw:
-            h = bits::mix64(h ^ ag(f.agent));
-            return bits::mix64(h ^ hash(*f.children[0], s));
-        case FormulaKind::Common: {
-            std::uint64_t g = 0;
-            for (AgentIdx x : f.group) g += bits::mix64(ag(x) + 0x51);
-            h = bits::mix64(h ^ g);
-            return bits::mix64(h ^ hash(*f.children[0], s));
-        }
-        case FormulaKind::Not:
-            return bits::mix64(h ^ hash(*f.children[0], s));
-        case FormulaKind::And:
-        case FormulaKind::Or: {
-            std::uint64_t sum = 0;
-            for (auto& c : f.children) sum += hash(*c, s);
-            return bits::mix64(h ^ sum);
-        }
-        default:
-            return h;
+// Compares formulas and actions under one swap. Formulas are hash-consed DAGs
+// with heavy sharing, so hashes and verdicts are memoised by formula id: without
+// that, every level of a comparison rehashed its whole subtree and shared
+// subformulas were walked once per path to them.
+class Matcher {
+public:
+    explicit Matcher(const AgentSymmetry::Swap& s) : s_(s) {}
+
+    // Exact test that renaming f by the swap yields g, up to reordering of ∧ / ∨.
+    bool equal(const Formula& f, const Formula& g) {
+        const std::uint64_t key = (std::uint64_t(f.id) << 32) | g.id;
+        if (auto it = eq_.find(key); it != eq_.end()) return it->second;
+        const bool r = compare(f, g);
+        eq_.emplace(key, r);
+        return r;
     }
-}
 
-// Exact test that renaming f by s yields g, up to reordering of ∧ / ∨.
-bool equal(const Formula& f, const AgentSymmetry::Swap& s, const Formula& g) {
-    if (f.kind != g.kind) return false;
-    const auto ag = [&](AgentIdx x) { return x == s.a ? s.b : x == s.b ? s.a : x; };
-    switch (f.kind) {
-        case FormulaKind::Top:
-        case FormulaKind::Bot:
-            return true;
-        case FormulaKind::Atom:
-            return s.atom[f.atom] == g.atom;
-        case FormulaKind::Not:
-            return equal(*f.children[0], s, *g.children[0]);
-        case FormulaKind::Belief:
-        case FormulaKind::Kw:
-            return ag(f.agent) == g.agent && equal(*f.children[0], s, *g.children[0]);
-        case FormulaKind::Common: {
-            std::vector<AgentIdx> x;
-            for (AgentIdx a : f.group) x.push_back(ag(a));
-            std::vector<AgentIdx> y = g.group;
-            std::sort(x.begin(), x.end());
-            std::sort(y.begin(), y.end());
-            return x == y && equal(*f.children[0], s, *g.children[0]);
-        }
-        case FormulaKind::And:
-        case FormulaKind::Or: {
-            if (f.children.size() != g.children.size()) return false;
-            // Pair children by hash; a collision can only cause a false negative.
-            const std::size_t n = f.children.size();
-            std::vector<std::pair<std::uint64_t, const Formula*>> fc(n), gc(n);
-            for (std::size_t i = 0; i < n; ++i) {
-                fc[i] = {hash(*f.children[i], &s), f.children[i].get()};
-                gc[i] = {hash(*g.children[i], nullptr), g.children[i].get()};
-            }
-            std::sort(fc.begin(), fc.end());
-            std::sort(gc.begin(), gc.end());
-            for (std::size_t i = 0; i < n; ++i)
-                if (fc[i].first != gc[i].first || !equal(*fc[i].second, s, *gc[i].second))
-                    return false;
-            return true;
-        }
-    }
-    return false;
-}
-
-bool equal_posts(const std::unordered_map<AtomIdx, FormulaPtr>& x,
-                 const AgentSymmetry::Swap& s,
-                 const std::unordered_map<AtomIdx, FormulaPtr>& y) {
-    if (x.size() != y.size()) return false;
-    for (const auto& [atom, cond] : x) {
-        auto it = y.find(s.atom[atom]);
-        if (it == y.end() || !equal(*cond, s, *it->second)) return false;
-    }
-    return true;
-}
-
-bool maps_action(const Action& x, const AgentSymmetry::Swap& s, const Action& y) {
-    if (x.events.size() != y.events.size() ||
-        x.designated_events != y.designated_events)
-        return false;
-
-    for (std::size_t e = 0; e < x.events.size(); ++e) {
-        const Event& ex = x.events[e];
-        const Event& ey = y.events[e];
-        if (!equal(*ex.precondition, s, *ey.precondition) ||
-            !equal_posts(ex.post_true, s, ey.post_true) ||
-            !equal_posts(ex.post_false, s, ey.post_false))
+    bool maps_action(const Action& x, const Action& y) {
+        if (x.events.size() != y.events.size() ||
+            x.designated_events != y.designated_events)
             return false;
+
+        for (std::size_t e = 0; e < x.events.size(); ++e) {
+            const Event& ex = x.events[e];
+            const Event& ey = y.events[e];
+            if (!equal(*ex.precondition, *ey.precondition) ||
+                !equal_posts(ex.post_true, ey.post_true) ||
+                !equal_posts(ex.post_false, ey.post_false))
+                return false;
+        }
+
+        const std::size_t na = std::max(x.obs_cases.size(), y.obs_cases.size());
+        static const std::vector<ObsCase> none;
+        for (AgentIdx i = 0; i < na; ++i) {
+            const AgentIdx j = i == s_.a ? s_.b : i == s_.b ? s_.a : i;
+            const auto& cx = i < x.obs_cases.size() ? x.obs_cases[i] : none;
+            const auto& cy = j < y.obs_cases.size() ? y.obs_cases[j] : none;
+            if (cx.size() != cy.size()) return false;
+            for (std::size_t c = 0; c < cx.size(); ++c)
+                if (cx[c].relation_bits != cy[c].relation_bits ||
+                    !equal(*cx[c].condition, *cy[c].condition))
+                    return false;
+        }
+        return true;
     }
 
-    const std::size_t na = std::max(x.obs_cases.size(), y.obs_cases.size());
-    static const std::vector<ObsCase> none;
-    for (AgentIdx i = 0; i < na; ++i) {
-        const AgentIdx j = i == s.a ? s.b : i == s.b ? s.a : i;
-        const auto& cx = i < x.obs_cases.size() ? x.obs_cases[i] : none;
-        const auto& cy = j < y.obs_cases.size() ? y.obs_cases[j] : none;
-        if (cx.size() != cy.size()) return false;
-        for (std::size_t c = 0; c < cx.size(); ++c)
-            if (cx[c].relation_bits != cy[c].relation_bits ||
-                !equal(*cx[c].condition, s, *cy[c].condition))
-                return false;
+private:
+    const AgentSymmetry::Swap& s_;
+    std::unordered_map<std::uint64_t, bool>          eq_;
+    std::unordered_map<std::uint32_t, std::uint64_t> renamed_, plain_;
+
+    AgentIdx ag(AgentIdx x, bool renamed) const {
+        return !renamed ? x : x == s_.a ? s_.b : x == s_.b ? s_.a : x;
     }
-    return true;
-}
+
+    // Structural hash invariant under reordering of ∧ / ∨ children, of f
+    // renamed by the swap or of f itself.
+    std::uint64_t hash(const Formula& f, bool renamed) {
+        auto& memo = renamed ? renamed_ : plain_;
+        if (auto it = memo.find(f.id); it != memo.end()) return it->second;
+
+        std::uint64_t h = bits::mix64(static_cast<std::uint64_t>(f.kind) + 1);
+        switch (f.kind) {
+            case FormulaKind::Atom:
+                h = bits::mix64(h ^ (renamed ? s_.atom[f.atom] : f.atom));
+                break;
+            case FormulaKind::Belief:
+            case FormulaKind::Kw:
+                h = bits::mix64(h ^ ag(f.agent, renamed));
+                h = bits::mix64(h ^ hash(*f.children[0], renamed));
+                break;
+            case FormulaKind::Common: {
+                std::uint64_t g = 0;
+                for (AgentIdx x : f.group) g += bits::mix64(ag(x, renamed) + 0x51);
+                h = bits::mix64(h ^ g);
+                h = bits::mix64(h ^ hash(*f.children[0], renamed));
+                break;
+            }
+            case FormulaKind::Not:
+                h = bits::mix64(h ^ hash(*f.children[0], renamed));
+                break;
+            case FormulaKind::And:
+            case FormulaKind::Or: {
+                std::uint64_t sum = 0;
+                for (auto& c : f.children) sum += hash(*c, renamed);
+                h = bits::mix64(h ^ sum);
+                break;
+            }
+            default:
+                break;
+        }
+        memo.emplace(f.id, h);
+        return h;
+    }
+
+    bool compare(const Formula& f, const Formula& g) {
+        if (f.kind != g.kind) return false;
+        switch (f.kind) {
+            case FormulaKind::Top:
+            case FormulaKind::Bot:
+                return true;
+            case FormulaKind::Atom:
+                return s_.atom[f.atom] == g.atom;
+            case FormulaKind::Not:
+                return equal(*f.children[0], *g.children[0]);
+            case FormulaKind::Belief:
+            case FormulaKind::Kw:
+                return ag(f.agent, true) == g.agent && equal(*f.children[0], *g.children[0]);
+            case FormulaKind::Common: {
+                std::vector<AgentIdx> x;
+                for (AgentIdx a : f.group) x.push_back(ag(a, true));
+                std::vector<AgentIdx> y = g.group;
+                std::sort(x.begin(), x.end());
+                std::sort(y.begin(), y.end());
+                return x == y && equal(*f.children[0], *g.children[0]);
+            }
+            case FormulaKind::And:
+            case FormulaKind::Or: {
+                if (f.children.size() != g.children.size()) return false;
+                // Pair children by hash; a collision can only cause a false negative.
+                const std::size_t n = f.children.size();
+                std::vector<std::pair<std::uint64_t, const Formula*>> fc(n), gc(n);
+                for (std::size_t i = 0; i < n; ++i) {
+                    fc[i] = {hash(*f.children[i], true), f.children[i].get()};
+                    gc[i] = {hash(*g.children[i], false), g.children[i].get()};
+                }
+                std::sort(fc.begin(), fc.end());
+                std::sort(gc.begin(), gc.end());
+                for (std::size_t i = 0; i < n; ++i)
+                    if (fc[i].first != gc[i].first || !equal(*fc[i].second, *gc[i].second))
+                        return false;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool equal_posts(const std::unordered_map<AtomIdx, FormulaPtr>& x,
+                     const std::unordered_map<AtomIdx, FormulaPtr>& y) {
+        if (x.size() != y.size()) return false;
+        for (const auto& [atom, cond] : x) {
+            auto it = y.find(s_.atom[atom]);
+            if (it == y.end() || !equal(*cond, *it->second)) return false;
+        }
+        return true;
+    }
+};
 
 // The state with agents a ↔ b and their atoms swapped.
 EpistemicState rename(const EpistemicState& s, const AgentSymmetry::Swap& sw) {
@@ -175,7 +207,7 @@ EpistemicState rename(const EpistemicState& s, const AgentSymmetry::Swap& sw) {
 
 } // namespace
 
-AgentSymmetry AgentSymmetry::detect(const PlanningTask& task) {
+AgentSymmetry AgentSymmetry::detect(const PlanningTask& task, Deadline deadline) {
     AgentSymmetry sym;
     const std::size_t na = task.num_agents();
 
@@ -197,7 +229,10 @@ AgentSymmetry AgentSymmetry::detect(const PlanningTask& task) {
 
     // Candidate swaps are independent; large models test them in parallel.
     std::vector<std::optional<Swap>> found(pairs.size());
+    // Each swap is verified on its own, so stopping early keeps only swaps that
+    // are true symmetries: pruning by fewer of them is still sound.
     const auto test = [&](std::size_t k) {
+        if (expired(deadline)) return;
         const auto [a, b] = pairs[k];
         const auto& an = task.agent_names[a];
         const auto& bn = task.agent_names[b];
@@ -224,9 +259,12 @@ AgentSymmetry AgentSymmetry::detect(const PlanningTask& task) {
             }
         }
 
-        if (task.goal && !equal(*task.goal, s, *task.goal)) return;
-        for (ActionIdx x = 0; x < task.num_actions(); ++x)
-            if (!maps_action(task.actions[x], s, task.actions[s.action[x]])) return;
+        Matcher m(s);
+        if (task.goal && !m.equal(*task.goal, *task.goal)) return;
+        for (ActionIdx x = 0; x < task.num_actions(); ++x) {
+            if (expired(deadline)) return;
+            if (!m.maps_action(task.actions[x], task.actions[s.action[x]])) return;
+        }
         if (bisim_contract(rename(task.init, s)).fingerprint() != init_fp) return;
 
         found[k] = std::move(s);
