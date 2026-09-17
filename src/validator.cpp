@@ -2,11 +2,25 @@
 #include "product_update.hpp"
 #include "bisimulation.hpp"
 #include <sstream>
+#include <unordered_set>
+
+namespace {
+
+// Plans are DAGs: a (node, state) pair already validated is not replayed.
+struct VisitHash {
+    std::size_t operator()(const std::pair<const PlanNode*, Fingerprint>& k) const noexcept {
+        return FingerprintHash{}(k.second) ^ std::hash<const PlanNode*>{}(k.first);
+    }
+};
+using Visited = std::unordered_set<std::pair<const PlanNode*, Fingerprint>, VisitHash>;
+
+} // namespace
 
 static void replay(const EpistemicState& s,
                    const std::shared_ptr<PlanNode>& node,
                    const PlanningTask& task,
-                   ValidationResult& result) {
+                   ValidationResult& result,
+                   Visited& visited) {
 
     // Null node means this branch is at goal
     if (!node) {
@@ -21,11 +35,10 @@ static void replay(const EpistemicState& s,
         return;
     }
 
-    // Find the action by name
-    const Action* action = nullptr;
-    for (auto& a : task.actions) {
-        if (a.name == node->action) { action = &a; break; }
-    }
+    if (!visited.insert({node.get(), s.fingerprint()}).second) return;
+
+    const auto it = task.action_index.find(node->action);
+    const Action* action = it == task.action_index.end() ? nullptr : &task.actions[it->second];
     if (!action) {
         result.valid = false;
         result.error = "Action not found in task: " + node->action;
@@ -59,7 +72,7 @@ static void replay(const EpistemicState& s,
             if (actual_eid != plan_eid) continue;
             found = true;
             EpistemicState contracted = bisim_contract(branch_state);
-            replay(contracted, subtree, task, result);
+            replay(contracted, subtree, task, result, visited);
             if (!result.valid) return;
             break;
         }
@@ -91,6 +104,7 @@ ValidationResult validate(const PlanningTask& task,
         return result;
     }
 
-    replay(init, plan_tree, task, result);
+    Visited visited;
+    replay(init, plan_tree, task, result, visited);
     return result;
 }
