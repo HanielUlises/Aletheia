@@ -51,6 +51,7 @@ holds `null`. An empty array means the goal already held.
 | `--no-symmetry` | Disable agent-symmetry pruning (on by default) |
 | `--threads <n>` | Worker threads for successor generation. Default: all cores; 1 = serial |
 | `--kd45-repair` | Delete non-serial worlds after KD45 updates. Off by default, matching plank |
+| `--no-portfolio` | Auto-selected AO\* on sensing tasks keeps the whole budget instead of handing over to replan |
 | `--help` | Show usage |
 
 An unknown heuristic or strategy label is an error listing the valid ones, not
