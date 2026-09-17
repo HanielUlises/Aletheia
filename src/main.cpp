@@ -323,7 +323,8 @@ int main(int argc, char* argv[]) {
             std::cerr << (vr.valid ? "[validator] OK\n" : "[validator] FAILED — " + vr.error + "\n");
         } else {
             out << "null\n";
-            std::cerr << (o.unsolvable ? "[main] No solution exists.\n" : "[main] No solution found.\n");
+            std::cerr << (o.unsolvable ? "[main] No solution found (no policy exists).\n"
+                                       : "[main] No solution found.\n");
         }
         return 0;
     }

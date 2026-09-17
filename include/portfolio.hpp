@@ -13,7 +13,7 @@ struct PortfolioOutcome {
     std::string                            member;       // empty if none succeeded
     std::optional<SearchResult>            linear;
     std::optional<ConditionalSearchResult> contingent;
-    bool                                   unsolvable{false};   // proven by AO* exhaustion
+    bool                                   unsolvable{false};   // AO* exhausted (no policy)
 };
 
 [[nodiscard]] PortfolioOutcome race(const PlanningTask& task, const Heuristic& relaxation,

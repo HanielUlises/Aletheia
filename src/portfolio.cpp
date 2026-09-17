@@ -24,7 +24,8 @@ PortfolioOutcome race(const PlanningTask& task, const Heuristic& relaxation,
     std::vector<std::pair<std::string, Run>> members = {
         {"gbfs+kadd", [&](PortfolioOutcome& o) { o.linear = gbfs::search(task, relaxation, 0, deadline); }},
         {"gbfs+ks",   [&](PortfolioOutcome& o) { o.linear = gbfs::search(task, spread, 0, deadline); }},
-        // Exhaustion is a proof: a linear plan is also a policy.
+        // Exhaustion rules out policies only; linear plans can remain when
+        // branching changes observability, so it does not end the race.
         {"aostar+kadd", [&](PortfolioOutcome& o) {
             o.contingent = aostar::search(task, relaxation, 0, deadline, &o.unsolvable);
         }},
@@ -52,9 +53,6 @@ PortfolioOutcome race(const PlanningTask& task, const Heuristic& relaxation,
                 winner = std::move(o);
                 winner.member = label;
                 std::cerr << "[portfolio] " << label << " found a plan after " << secs << " s\n";
-            } else if (o.unsolvable && !stop.exchange(true)) {
-                winner.unsolvable = true;
-                std::cerr << "[portfolio] " << label << " proved no plan exists after " << secs << " s\n";
             } else if (!found) {
                 std::cerr << "[portfolio] " << label << " stopped after " << secs << " s\n";
             }
