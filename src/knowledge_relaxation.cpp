@@ -132,7 +132,7 @@ std::uint32_t KnowledgeRelaxationHeuristic::compile(const FormulaPtr& f, bool ne
 
 void KnowledgeRelaxationHeuristic::add_op(std::uint32_t pre, const std::vector<std::uint32_t>& adds) {
     if (adds.empty()) return;
-    Op op{pre, static_cast<std::uint32_t>(op_adds_.size()), 0};
+    Op op{pre, static_cast<std::uint32_t>(op_adds_.size()), 0, current_action_};
     op_adds_.insert(op_adds_.end(), adds.begin(), adds.end());
     op.end = static_cast<std::uint32_t>(op_adds_.size());
     ops_.push_back(op);
@@ -178,6 +178,7 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
             nested[{f->agent, f->children[0]->agent}].push_back(f->children[0]->children[0]->id);
 
     for (const Action& a : task.actions) {
+        current_action_ = static_cast<ActionIdx>(&a - task.actions.data());
         const std::size_t ne = a.events.size();
         std::vector<std::vector<FormulaPtr>> after(ne);
         for (std::size_t e = 0; e < ne; ++e) after[e] = after_literals(a.events[e]);
@@ -209,7 +210,7 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
         const auto obs_of = [&](AgentIdx j, EventIdx e) {
             std::vector<std::pair<std::uint32_t, std::vector<EventIdx>>> out;
             if (j >= a.obs_cases.size() || a.obs_cases[j].empty())
-                out.emplace_back(node(Kind::True, {}), events_in(all_events));
+                out.emplace_back(node(Kind::True, {}), events_in(a.default_obs.event_row(e)));
             else
                 for (const ObsCase& c : a.obs_cases[j])
                     out.emplace_back(compile(c.condition, false), events_in(c.event_row(e)));
@@ -337,7 +338,7 @@ void KnowledgeRelaxationHeuristic::prune() {
     std::vector<std::uint32_t> adds;
     for (std::size_t o = 0; o < ops_.size(); ++o) {
         if (!op_needed[o]) continue;
-        Op op{ops_[o].pre, static_cast<std::uint32_t>(adds.size()), 0};
+        Op op{ops_[o].pre, static_cast<std::uint32_t>(adds.size()), 0, ops_[o].action};
         for (std::uint32_t i = ops_[o].begin; i < ops_[o].end; ++i)
             if (fact_needed[op_adds_[i]]) adds.push_back(op_adds_[i]);
         op.end = static_cast<std::uint32_t>(adds.size());
@@ -354,11 +355,12 @@ void KnowledgeRelaxationHeuristic::prune() {
         if (!fact_needed[f]) { facts_[f] = nullptr; derived_[f] = -1; }
 }
 
-float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,
-                                               const PlanningTask&) const {
-    thread_local std::vector<std::int32_t> fc, rc;
+void KnowledgeRelaxationHeuristic::costs(const EpistemicState& s, std::vector<std::int32_t>& fc,
+                                         std::vector<std::int32_t>& rc,
+                                         std::vector<std::int32_t>* supporter) const {
     fc.assign(facts_.size(), kInf);
     rc.assign(reqs_.size(), kInf);
+    if (supporter) supporter->assign(facts_.size(), -1);
 
     const auto des = s.designated_bits();
     for (std::size_t f = 0; f < facts_.size(); ++f)
@@ -393,18 +395,84 @@ float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,
     for (int round = 0; round < 1024; ++round) {
         eval();
         bool changed = false;
-        for (const Op& op : ops_) {
+        for (std::size_t o = 0; o < ops_.size(); ++o) {
+            const Op& op = ops_[o];
             const std::int32_t c = rc[op.pre];
             if (c >= kInf) continue;
             for (std::uint32_t i = op.begin; i < op.end; ++i)
-                if (c + 1 < fc[op_adds_[i]]) { fc[op_adds_[i]] = c + 1; changed = true; }
+                if (c + 1 < fc[op_adds_[i]]) {
+                    fc[op_adds_[i]] = c + 1;
+                    if (supporter) (*supporter)[op_adds_[i]] = static_cast<std::int32_t>(o);
+                    changed = true;
+                }
         }
         for (std::size_t f = 0; f < facts_.size(); ++f)
-            if (derived_[f] >= 0 && rc[derived_[f]] < fc[f]) { fc[f] = rc[derived_[f]]; changed = true; }
+            if (derived_[f] >= 0 && rc[derived_[f]] < fc[f]) {
+                fc[f] = rc[derived_[f]];
+                if (supporter) (*supporter)[f] = -1;
+                changed = true;
+            }
         if (!changed) break;
     }
+    if (supporter) eval();
+}
 
+float KnowledgeRelaxationHeuristic::operator()(const EpistemicState& s,
+                                               const PlanningTask&) const {
+    thread_local std::vector<std::int32_t> fc, rc;
+    costs(s, fc, rc, nullptr);
     float h = 0.f;
     for (std::uint32_t r : goal_) h += rc[r] >= kInf ? kDead : float(rc[r]);
     return h;
+}
+
+bool KnowledgeRelaxationHeuristic::preferred(const EpistemicState& s, const PlanningTask&,
+                                             std::vector<ActionIdx>& out) const {
+    thread_local std::vector<std::int32_t> fc, rc, sup;
+    thread_local std::vector<char> seen_req, seen_fact;
+    costs(s, fc, rc, &sup);
+    out.clear();
+    seen_req.assign(reqs_.size(), 0);
+    seen_fact.assign(facts_.size(), 0);
+
+    // Backchain from the goal: cheapest disjunct, every conjunct, and for each
+    // unmet fact its supporting operator. Operators whose precondition already
+    // costs nothing are the helpful actions.
+    std::vector<std::uint32_t> stack(goal_.begin(), goal_.end());
+    while (!stack.empty()) {
+        const std::uint32_t r = stack.back();
+        stack.pop_back();
+        if (seen_req[r] || rc[r] == 0 || rc[r] >= kInf) continue;
+        seen_req[r] = 1;
+        const Req& q = reqs_[r];
+        switch (q.kind) {
+            case Kind::And:
+                for (std::uint32_t i = q.begin; i < q.end; ++i) stack.push_back(req_children_[i]);
+                break;
+            case Kind::Or: {
+                std::uint32_t best = req_children_[q.begin];
+                for (std::uint32_t i = q.begin; i < q.end; ++i)
+                    if (rc[req_children_[i]] < rc[best]) best = req_children_[i];
+                stack.push_back(best);
+                break;
+            }
+            case Kind::Fact: {
+                const std::uint32_t f = q.fact;
+                if (seen_fact[f]) break;
+                seen_fact[f] = 1;
+                if (sup[f] >= 0) {
+                    const Op& op = ops_[sup[f]];
+                    if (rc[op.pre] == 0) out.push_back(op.action);
+                    else stack.push_back(op.pre);
+                } else if (derived_[f] >= 0) {
+                    stack.push_back(static_cast<std::uint32_t>(derived_[f]));
+                }
+                break;
+            }
+            default: break;
+        }
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return true;
 }

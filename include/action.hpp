@@ -56,6 +56,10 @@ struct Action {
     // If no case matches, agent is treated as fully observable.
     std::vector<std::vector<ObsCase>> obs_cases;
 
+    // Relation of the first declared observability type, used for an agent
+    // none of whose conditions holds at every designated world (as in plank).
+    ObsCase default_obs;
+
     size_t num_agents{0};
 
     // True iff the action has exactly one designated event and is therefore

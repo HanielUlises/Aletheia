@@ -174,8 +174,11 @@ struct Worse {
 
 } // namespace
 
-std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
-                                   std::size_t max_nodes, Deadline deadline) {
+namespace {
+
+std::optional<SearchResult> run(const PlanningTask& task, const Heuristic& h,
+                                std::size_t max_nodes, Deadline deadline,
+                                bool helpful, bool& pruned) {
     SearchResult result;
     result.stats.start_timer();
 
@@ -235,6 +238,21 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
         std::vector<ActionIdx> cands;
         for (ActionIdx ai = 0; ai < task.actions.size(); ++ai)
             if (keep(task, stab, ai, result.stats)) cands.push_back(ai);
+
+        // Helpful actions first: expand only relaxed-plan actions when there
+        // are any; a failed search that pruned this way is retried in full.
+        if (helpful) {
+            thread_local std::vector<ActionIdx> pref;
+            if (h.preferred(parent, task, pref)) {
+                std::vector<ActionIdx> kept;
+                for (ActionIdx ai : cands)
+                    if (std::binary_search(pref.begin(), pref.end(), ai)) kept.push_back(ai);
+                if (!kept.empty() && kept.size() < cands.size()) {
+                    cands.swap(kept);
+                    pruned = true;
+                }
+            }
+        }
 
         // Successors are built independently, in parallel when the models are
         // large enough to pay for it, and merged in action order so results do
@@ -326,9 +344,21 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
     }
 
     result.stats.closed_size = closed.size();
-    std::cerr << "[gbfs] Search exhausted — no solution.\n";
+    std::cerr << (pruned ? "[gbfs] Helpful-action search exhausted.\n"
+                         : "[gbfs] Search exhausted — no solution.\n");
     result.stats.stop_timer();
     return std::nullopt;
+}
+
+} // namespace
+
+std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
+                                   std::size_t max_nodes, Deadline deadline) {
+    bool pruned = false;
+    auto r = run(task, h, max_nodes, deadline, task.helpful_actions, pruned);
+    if (r || !pruned || std::chrono::steady_clock::now() >= deadline) return r;
+    std::cerr << "[gbfs] Retrying without helpful-action pruning.\n";
+    return run(task, h, max_nodes, deadline, false, pruned);
 }
 
 } // namespace gbfs

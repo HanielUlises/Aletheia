@@ -12,6 +12,19 @@
 
 namespace json {
 
+std::vector<std::pair<std::string_view, Value>> Value::members() const {
+    std::vector<std::pair<std::string_view, Value>> out;
+    const Node& n = node();
+    if (n.type != Type::Object) return out;
+    out.reserve(n.a);
+    for (std::uint32_t i = i_ + 1, k = 0; k < n.a; ++k) {
+        const std::uint32_t v = d_->tape_[i].next;
+        out.emplace_back(Value{d_, i}.str(), Value{d_, v});
+        i = d_->tape_[v].next;
+    }
+    return out;
+}
+
 std::vector<std::pair<std::string_view, Value>> Value::items() const {
     std::vector<std::pair<std::string_view, Value>> out;
     const Node& n = node();

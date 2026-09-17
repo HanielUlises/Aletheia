@@ -6,6 +6,10 @@ struct Heuristic {
     virtual ~Heuristic() = default;
     virtual float operator()(const EpistemicState& s,
                              const PlanningTask& task) const = 0;
+
+    // Preferred (helpful) actions at s; false if the heuristic has none.
+    virtual bool preferred(const EpistemicState&, const PlanningTask&,
+                           std::vector<ActionIdx>&) const { return false; }
 };
 
 // Returns true if `f` is, or has a top-level conjunct that is,

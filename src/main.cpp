@@ -134,6 +134,8 @@ static void usage(const char* prog) {
         << "  --conditional  Force AO* (alias for --strategy aostar)\n"
         << "  --no-symmetry  Disable agent-symmetry pruning\n"
         << "  --kd45-repair  Delete non-serial worlds after KD45 updates\n"
+        << "  --no-portfolio Auto-selected AO* keeps the whole budget\n"
+        << "  --no-helpful   GBFS expands every action, not preferred ones first\n"
         << "  --threads      Worker threads (default: all cores; 1 = serial)\n"
         << "  --help         Show this message\n";
 }
@@ -153,6 +155,8 @@ int main(int argc, char* argv[]) {
     bool explain      = false;
     bool symmetry     = true;
     bool kd45_repair  = false;
+    bool portfolio_on = true;
+    bool helpful_on   = true;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -171,6 +175,8 @@ int main(int argc, char* argv[]) {
         else if (arg == "--gbfs")         strategy_name_arg = "gbfs";
         else if (arg == "--no-symmetry")  symmetry          = false;
         else if (arg == "--kd45-repair")  kd45_repair       = true;
+        else if (arg == "--no-portfolio") portfolio_on      = false;
+        else if (arg == "--no-helpful")   helpful_on        = false;
         else if (arg == "--threads"   && i+1 < argc) par::set_threads(std::stoul(argv[++i]));
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
@@ -210,7 +216,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    task.kd45_repair = kd45_repair;
+    task.kd45_repair     = kd45_repair;
+    task.helpful_actions = helpful_on;
     const TaskFeatures features = TaskFeatures::extract(task);
 
     if (symmetry) {
@@ -297,8 +304,8 @@ int main(int argc, char* argv[]) {
         // Auto-selected AO* on a sensing task runs as a portfolio: a short AO*
         // pass keeps shallowest plans on easy tasks, then replan takes the
         // remaining time.
-        const bool portfolio = strategy == Strategy::AOSTAR && !strategy_rule.empty() &&
-                               has_sensing_actions(task);
+        const bool portfolio = portfolio_on && strategy == Strategy::AOSTAR &&
+                               !strategy_rule.empty() && has_sensing_actions(task);
         const auto ao_budget = std::chrono::seconds(
             std::min<std::size_t>(5, timeout_secs > 0 ? std::max<std::size_t>(1, timeout_secs / 10) : 5));
         bool exhausted = false;

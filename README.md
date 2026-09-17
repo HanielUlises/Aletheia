@@ -4,7 +4,7 @@
 Built at **UNAM–FI** (Artificial Intelligence Microsoft Lab) / **IPN–ESCOM**.
 
 [![Release](https://github.com/HanielUlises/Aletheia/actions/workflows/release.yml/badge.svg)](https://github.com/HanielUlises/Aletheia/actions/workflows/release.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![ICAPS 2026](https://img.shields.io/badge/ICAPS-2026%20Workshop-orange.svg)](https://www.icaps-conference.org/)
 
@@ -448,4 +448,4 @@ Notably absent: `std::mdspan`, which is the natural spelling for the $\lvert W\r
 
 ## License
 
-MIT
+Apache License 2.0

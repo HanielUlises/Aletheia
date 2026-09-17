@@ -48,10 +48,9 @@ private:
     size_t cap_;
 };
 
-inline WorldCapPolicy make_world_cap_policy(bool partial_obs) {
-    return WorldCapPolicy{
-        partial_obs
-            ? std::numeric_limits<size_t>::max()
-            : WorldCapPolicy::kDefaultCap
-    };
+// Unbounded: a cap prunes branches silently, which loses plans and turned
+// exhaustion into false unsolvability proofs (IεPC amc-09-05-muddy has an
+// 8-step plan through 1024 raw worlds). Memory is bounded elsewhere.
+inline WorldCapPolicy make_world_cap_policy(bool /*partial_obs*/) {
+    return WorldCapPolicy{std::numeric_limits<size_t>::max()};
 }
