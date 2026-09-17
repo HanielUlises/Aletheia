@@ -155,6 +155,23 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
             for (const ObsCase& c : cases) compile(c.condition, false);
     }
     std::map<std::pair<AgentIdx, AgentIdx>, std::vector<std::uint32_t>> nested;   // (i, j) → literal ids
+
+    // C_G ψ for ψ a literal or a disjunction of literals: the literals any of
+    // which, once commonly observed, establishes the fact.
+    struct Common { FormulaPtr fact; std::vector<AgentIdx> group; std::vector<std::uint32_t> lits; };
+    std::vector<Common> commons;
+    for (const FormulaPtr& f : facts_) {
+        if (f->kind != FormulaKind::Common) continue;
+        const FormulaPtr& psi = f->children[0];
+        Common c{f, f->group, {}};
+        if (is_literal(*psi)) c.lits.push_back(psi->id);
+        else if (psi->kind == FormulaKind::Or &&
+                 std::all_of(psi->children.begin(), psi->children.end(),
+                             [](const FormulaPtr& x) { return is_literal(*x); }))
+            for (const auto& x : psi->children) c.lits.push_back(x->id);
+        if (!c.lits.empty()) commons.push_back(std::move(c));
+    }
+
     for (const FormulaPtr& f : facts_)
         if (f->kind == FormulaKind::Belief && f->children[0]->kind == FormulaKind::Belief &&
             is_literal(*f->children[0]->children[0]))
@@ -224,6 +241,25 @@ KnowledgeRelaxationHeuristic::KnowledgeRelaxationHeuristic(const PlanningTask& t
                         gains.push_back(fact(Formula::make_belief(j, l)));
                     add_op(node(Kind::And, {pre, cond}), gains);
                 }
+            }
+
+            // C_G ψ: every agent in G has a case that sees e alone, and a literal
+            // of ψ holds after e.
+            for (const Common& cm : commons) {
+                const bool learnt = std::any_of(after[e].begin(), after[e].end(), [&](const FormulaPtr& l) {
+                    return std::find(cm.lits.begin(), cm.lits.end(), l->id) != cm.lits.end();
+                });
+                if (!learnt) continue;
+                std::vector<std::uint32_t> conds{pre};
+                bool all_see = true;
+                for (AgentIdx g : cm.group) {
+                    std::vector<std::uint32_t> alts;
+                    for (const auto& [cond, row] : obs_of(g, e))
+                        if (row.size() == 1 && row[0] == e) alts.push_back(cond);
+                    if (alts.empty()) { all_see = false; break; }
+                    conds.push_back(alts.size() == 1 ? alts[0] : node(Kind::Or, alts));
+                }
+                if (all_see) add_op(node(Kind::And, conds), {fact(cm.fact)});
             }
 
             // [i][j]ℓ: in every event i cannot tell from e, j sees only events
