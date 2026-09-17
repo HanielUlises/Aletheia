@@ -369,6 +369,36 @@ PlanningTask load_task(const std::string& json_path) {
 
             AgentIdx ag = ait->second;
 
+            // Compact form written by tools/ground: distinct successor sets and,
+            // for each world in the order of "worlds", the index of its set.
+            if (rows.is_object() && rows.contains("sets") && rows.contains("of")) {
+                std::vector<std::uint32_t> ids;
+                for (const auto set : rows.at("sets")) {
+                    succ.clear();
+                    for (const auto t : set) {
+                        const WorldIdx dst = t.is_number() ? static_cast<WorldIdx>(t.number())
+                                                           : world_of(t.str());
+                        if (dst != kNoWorld && dst < nw) succ.push_back(dst);
+                    }
+                    std::sort(succ.begin(), succ.end());
+                    succ.erase(std::unique(succ.begin(), succ.end()), succ.end());
+                    ids.push_back(interner.intern(succ));
+                }
+                const auto of = rows.at("of");
+                if (of.size() != nw)
+                    throw std::runtime_error("relations of agent " + std::string(agent_name) +
+                                             ": \"of\" has " + std::to_string(of.size()) +
+                                             " entries for " + std::to_string(nw) + " worlds");
+                for (std::size_t w = 0; w < nw; ++w) {
+                    const auto k = static_cast<std::size_t>(of[w].number());
+                    if (k >= ids.size())
+                        throw std::runtime_error("relations of agent " + std::string(agent_name) +
+                                                 ": set index out of range");
+                    task.init.set_of[std::size_t(ag) * nw + w] = ids[k];
+                }
+                continue;
+            }
+
             for (auto& [src_wname, targets] : rows.items()) {
                 const WorldIdx src = world_of(src_wname);
                 if (src == kNoWorld) continue;

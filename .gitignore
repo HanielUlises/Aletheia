@@ -1,4 +1,5 @@
 /[Bb]uild/
+/build-ground/
 /bin/
 /out/
 # spy-ring: large grounded instances are rebuilt by ground.sh

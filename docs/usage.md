@@ -23,6 +23,37 @@ LTO, then strip; both matter for the figures in [evaluation.md](evaluation.md).
 
 An Apptainer definition for the competition image is in `Apptainer.aletheia`.
 
+### As a library
+
+The same build also produces `libaletheia.a`, the planning core without
+`main.cpp`, for programs that search in process.
+[ePlanSys](https://github.com/ePlanSys/eplansys) is one: its ROS 2 plan
+solver links it rather than keeping a copy of the sources. Install it and find
+it by name:
+
+```sh
+cmake --install build --prefix <prefix>
+```
+
+```cmake
+find_package(aletheia 0.2 REQUIRED)
+target_link_libraries(my_target PRIVATE aletheia::aletheia)
+```
+
+Headers are included as `<aletheia/search.hpp>`. `strategy.hpp` turns the
+labels the selection policy speaks in into heuristics and strategies, so a
+program that honours the policy can build every choice it makes.
+
+The library is compiled without `-march=native` and without LTO, whatever
+`ALETHEIA_NATIVE` says, because both would leak into the program linking it:
+`bitset.hpp` inlines a different `pext_word` under BMI2, and an archive of slim
+LTO objects does not link into a program built without LTO. The binary keeps
+both. `-DALETHEIA_LIBRARY=OFF` skips the library.
+
+`package.xml` makes the checkout a colcon package, so a ROS 2 workspace builds
+it from source like any other, and the installed `epistemic_planner` is on
+`PATH` once the workspace is sourced.
+
 ## Running
 
 ```sh
@@ -46,7 +77,7 @@ holds `null`. An empty array means the goal already held.
 | `--print-policy` | Write the effective policy to stdout and exit |
 | `--explain` | Report the task features and which rule decided each auto-selection |
 | `--limit <n>` | Max nodes (GBFS/EHC) or max depth (AO\*); 0 = unlimited |
-| `--timeout <s>` | Timeout in seconds |
+| `--timeout <s>` | Wall-clock limit in seconds, counted from process start and shared by every search and fallback |
 | `--gbfs`, `--ehc`, `--conditional` | Aliases for `--strategy gbfs` / `ehc` / `aostar` |
 | `--no-symmetry` | Disable agent-symmetry pruning (on by default) |
 | `--threads <n>` | Worker threads for successor generation. Default: all cores; 1 = serial |
@@ -70,6 +101,42 @@ a silent fallback.
   log per instance to `smoke-logs/`. Also defaults to `--heuristic ed`.
 - `./run_benchmarks.sh` — sweeps a task set across several heuristics into
   `results/`.
+
+## Grounding large tasks
+
+`plank export` writes every accessibility edge of the initial state and builds
+the whole document in memory first. On IεPC `gos-13-all` (8 192 worlds, 13
+agents) that runs past 31 GB before anything is written. `tools/ground` grounds
+with plank's libraries and writes the same JSON, except that each agent's
+relation is a table of distinct successor sets:
+
+```json
+"relations": {
+  "A": { "sets": [["w0", "w2"], ["w1", "w3"]],
+         "of":   [0, 1, 0, 1] }
+}
+```
+
+`"of"` gives, for every world in the order of `"worlds"`, the index of its set;
+set members may be world names or indices. The planner reads both this form and
+plank's, agent by agent. On S5 and KD45 models the sets of one agent are
+disjoint, so the relation is linear in the number of worlds: `gos-13-all`
+grounds in about a minute to a 2.5 MB file, which the planner solves in seconds.
+The initial state is also marked with `"relations-format": "successor-sets"` in
+`"planning-task-info"`.
+
+Build against a built plank checkout (the tool links its `epddl_lib` and
+`del_lib` and needs Boost headers):
+
+```sh
+cmake -S tools/ground -B build-ground -DPLANK_DIR=/path/to/plank
+cmake --build build-ground -j"$(nproc)"
+build-ground/ground -d domain.epddl -p problem.epddl -l library.epddl -o task.json
+```
+
+`ground export -d … -p … -l … -o <dir>` takes the arguments of `plank export`
+and, like it, writes `<dir>/<problem>.json`, so it can stand in for plank in
+scripts that call the exporter.
 
 ## Selection policy
 
