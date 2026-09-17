@@ -86,6 +86,7 @@ void build_successor(const EpistemicState& parent, const Action& action,
     out.fp    = out.state.fingerprint();
     out.goal  = out.state.satisfies(*task.goal);
     if (!out.goal && !closed.contains(out.fp)) out.h = h(out.state, task);
+    out.state.drop_cache();
 }
 
 // Enough work per expansion to cover waking the pool.
@@ -286,6 +287,10 @@ std::optional<SearchResult> search(const PlanningTask& task, const Heuristic& h,
             result.stats.max_frontier_size =
                 std::max(result.stats.max_frontier_size, open.size());
         }
+
+        // Expanded: only the parent link and action are needed from here on.
+        live_bytes -= nodes[cur_idx].state.footprint();
+        nodes[cur_idx].state = EpistemicState{};
 
         if (!generated_successor) result.stats.dead_ends++;
     }

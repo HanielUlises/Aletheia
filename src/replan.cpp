@@ -83,7 +83,8 @@ std::optional<std::vector<Step>>
 find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local_ban,
           Context& c, bool& hit_stack) {
     struct Node {
-        EpistemicState state;
+        EpistemicState state;    // released once expanded
+        Fingerprint    fp;
         std::uint32_t  parent;
         ActionIdx      action;
     };
@@ -101,14 +102,14 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
     FingerprintSet     closed;
 
     const Fingerprint root_fp = root.fingerprint();
-    nodes.push_back({root, UINT32_MAX, 0});
+    nodes.push_back({root, root_fp, UINT32_MAX, 0});
     closed.insert(root_fp);
     open.push_back({c.h(root, c.task), 0, 0});
 
     const auto path_to = [&](std::uint32_t i) {
         std::vector<Step> path;
         for (; nodes[i].parent != UINT32_MAX; i = nodes[i].parent)
-            path.push_back({nodes[nodes[i].parent].state.fingerprint(), nodes[i].action});
+            path.push_back({nodes[nodes[i].parent].fp, nodes[i].action});
         std::reverse(path.begin(), path.end());
         return path;
     };
@@ -121,8 +122,8 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
         open.pop_back();
         c.stats.nodes_expanded++;
 
-        const EpistemicState& s  = nodes[cur.idx].state;
-        const Fingerprint     fp = s.fingerprint();
+        const EpistemicState s  = std::move(nodes[cur.idx].state);
+        const Fingerprint    fp = nodes[cur.idx].fp;
         const StateSymmetry stab = c.task.symmetry ? stabiliser(*c.task.symmetry, s)
                                                    : StateSymmetry{};
 
@@ -139,7 +140,7 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
                 if (c.stack.count(nfp)) { hit_stack = true; continue; }
 
                 const std::uint32_t g = cur.g + 1;
-                nodes.push_back({std::move(next), cur.idx, ai});
+                nodes.push_back({std::move(next), nfp, cur.idx, ai});
                 const auto idx = static_cast<std::uint32_t>(nodes.size() - 1);
 
                 if (nodes[idx].state.satisfies(*c.task.goal) || c.solved.count(nfp))
@@ -147,6 +148,7 @@ find_path(const EpistemicState& root, const std::unordered_set<ActionIdx>& local
 
                 c.stats.heuristic_calls++;
                 open.push_back({c.h(nodes[idx].state, c.task), g, idx});
+                nodes[idx].state.drop_cache();
                 std::push_heap(open.begin(), open.end());
             }
         }
@@ -231,8 +233,10 @@ search(const PlanningTask& task, const Heuristic& h, Deadline deadline) {
     out.stats.stop_timer();
 
     if (!r.ok) {
-        std::cerr << (c.timed_out ? "[replan] Deadline exceeded.\n"
-                                  : "[replan] No solution exists.\n");
+        std::cerr << (c.timed_out ? "[replan] Deadline exceeded." : "[replan] No solution exists.")
+                  << "  Expanded=" << out.stats.nodes_expanded
+                  << "  Generated=" << out.stats.nodes_generated
+                  << "  Solved=" << c.solved.size() << "  Dead=" << c.dead.size() << "\n";
         return std::nullopt;
     }
     out.plan_tree = r.tree;

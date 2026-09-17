@@ -119,6 +119,10 @@ struct EpistemicState {
 
     void invalidate() const noexcept;
 
+    // Frees the satisfaction cache but keeps the fingerprint. For states that
+    // wait in an open list: the cache is rebuilt on demand.
+    void drop_cache() const noexcept;
+
     // Identity.
     //
     // These compare the *labelled* structure. They are exact up to isomorphism
