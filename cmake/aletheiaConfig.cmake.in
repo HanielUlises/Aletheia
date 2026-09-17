@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+# nlohmann_json is private to the library, but a static archive carries its
+# link interface, so the target has to exist where the archive is linked.
+find_dependency(nlohmann_json 3.10)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/aletheiaTargets.cmake")
+check_required_components(aletheia)
