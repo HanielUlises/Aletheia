@@ -149,6 +149,9 @@ static void usage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
+    // --timeout counts from process start: loading and grounding a large task
+    // takes seconds, and a harness limits the whole run, not the search.
+    const auto t_process = std::chrono::steady_clock::now();
 
     std::string task_path;
     std::string plan_path;
@@ -231,7 +234,11 @@ int main(int argc, char* argv[]) {
     const TaskFeatures features = TaskFeatures::extract(task);
 
     if (symmetry) {
-        auto sym = std::make_shared<AgentSymmetry>(AgentSymmetry::detect(task));
+        // Symmetry only prunes, so detection gets a tenth of the limit and keeps
+        // whatever swaps it verified in that time.
+        const Deadline detect_by = timeout_secs > 0
+            ? t_process + std::chrono::milliseconds(timeout_secs * 100) : Deadline::max();
+        auto sym = std::make_shared<AgentSymmetry>(AgentSymmetry::detect(task, detect_by));
         std::cerr << "[symmetry] " << sym->swaps.size() << " agent swaps\n";
         if (!sym->empty()) task.symmetry = std::move(sym);
     }
@@ -301,6 +308,10 @@ int main(int argc, char* argv[]) {
 
     using Clock = std::chrono::steady_clock;
 
+    // One absolute deadline for every search and fallback below.
+    const Deadline deadline = timeout_secs > 0
+        ? t_process + std::chrono::seconds(timeout_secs) : Deadline::max();
+
     std::ofstream out(plan_path);
     if (!out.is_open()) {
         std::cerr << "Error: cannot open output file: " << plan_path << "\n";
@@ -309,8 +320,6 @@ int main(int argc, char* argv[]) {
 
     if (strategy == Strategy::PORTFOLIO) {
         std::cerr << "[main] Mode: portfolio\n";
-        const Deadline deadline = timeout_secs > 0
-            ? Clock::now() + std::chrono::seconds(timeout_secs) : Deadline::max();
         const KnowledgeRelaxationHeuristic relaxation(task);
         const KnowledgeSpreadHeuristic     spread;
         PortfolioOutcome o = race(task, relaxation, spread, deadline);
@@ -322,8 +331,12 @@ int main(int argc, char* argv[]) {
             if (!o.contingent->plan_tree) out << "[]\n";
             else { write_plan_tree(out, o.contingent->plan_tree); out << "\n"; }
             std::cerr << "[main] Conditional plan written to " << plan_path << " (" << o.member << ")\n";
-            auto vr = validate(task, o.contingent->plan_tree);
-            std::cerr << (vr.valid ? "[validator] OK\n" : "[validator] FAILED — " + vr.error + "\n");
+            if (expired(deadline)) {
+                std::cerr << "[validator] skipped: deadline reached\n";
+            } else {
+                auto vr = validate(task, o.contingent->plan_tree);
+                std::cerr << (vr.valid ? "[validator] OK\n" : "[validator] FAILED — " + vr.error + "\n");
+            }
         } else {
             out << "null\n";
             std::cerr << (o.unsolvable ? "[main] No solution found (no policy exists).\n"
@@ -334,12 +347,6 @@ int main(int argc, char* argv[]) {
 
     if (strategy == Strategy::AOSTAR || strategy == Strategy::REPLAN) {
         std::cerr << "[main] Mode: " << strategy_name(strategy) << "\n";
-
-        auto deadline = timeout_secs > 0
-            ? Clock::now() + std::chrono::seconds(timeout_secs)
-            : std::chrono::time_point<Clock>::max();
-
-        auto t_start = Clock::now();
 
         // Auto-selected AO* on a sensing task runs as a portfolio: a short AO*
         // pass keeps shallowest plans on easy tasks, then replan takes the
@@ -367,22 +374,12 @@ int main(int argc, char* argv[]) {
             // may exist that AO* couldn't find within the time/depth budget.
             // GBFS with the remaining wall-clock budget has a different search
             // order and may succeed.
-            if (!has_sensing_actions(task)) {
+            // GBFS gets what is left of the same deadline. A deadline already
+            // reached leaves nothing to spend.
+            if (!has_sensing_actions(task) && !expired(deadline)) {
                 std::cerr << "[main] AO* failed — falling back to GBFS\n";
 
-                size_t remaining = 0;
-                if (timeout_secs > 0) {
-                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                        Clock::now() - t_start).count();
-                    remaining = (elapsed < (long long)timeout_secs)
-                        ? timeout_secs - (size_t)elapsed : 0;
-                }
-
-                Deadline gbfs_deadline = remaining > 0
-                    ? Clock::now() + std::chrono::seconds(remaining)
-                    : Deadline::max();
-
-                auto gbfs_result = gbfs::search(task, *h, limit, gbfs_deadline);
+                auto gbfs_result = gbfs::search(task, *h, limit, deadline);
                 if (gbfs_result) {
                     write_linear_plan(out, *gbfs_result);
                     std::cerr << "[main] Plan written to " << plan_path << "\n";
@@ -409,18 +406,21 @@ int main(int argc, char* argv[]) {
             std::cerr << "[main] Conditional plan written to " << plan_path << "\n";
         }
 
-        auto vr = validate(task, result->plan_tree);
-        if (vr.valid)
-            std::cerr << "[validator] OK — " << vr.leaves_reached
-                      << " leaves, " << vr.branches_checked << " branches checked\n";
-        else
-            std::cerr << "[validator] FAILED — " << vr.error << "\n";
+        // The plan is already written; checking it must not outlast the run.
+        if (expired(deadline)) {
+            std::cerr << "[validator] skipped: deadline reached\n";
+        } else {
+            auto vr = validate(task, result->plan_tree);
+            if (vr.valid)
+                std::cerr << "[validator] OK — " << vr.leaves_reached
+                          << " leaves, " << vr.branches_checked << " branches checked\n";
+            else
+                std::cerr << "[validator] FAILED — " << vr.error << "\n";
+        }
 
     } else if (strategy == Strategy::EHC) {
         std::cerr << "[main] Mode: EHC\n";
 
-        const Deadline deadline = timeout_secs > 0
-            ? Clock::now() + std::chrono::seconds(timeout_secs) : Deadline::max();
         auto result = ehc::search(task, *h, limit, deadline);
         if (!result) {
             std::cerr << "[main] EHC failed — falling back to GBFS\n";
@@ -439,8 +439,6 @@ int main(int argc, char* argv[]) {
     } else {
         std::cerr << "[main] Mode: GBFS\n";
 
-        const Deadline deadline = timeout_secs > 0
-            ? Clock::now() + std::chrono::seconds(timeout_secs) : Deadline::max();
         auto result = gbfs::search(task, *h, limit, deadline);
         if (!result) {
             out << "null\n";
