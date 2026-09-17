@@ -33,10 +33,11 @@ int modal_depth(const Formula& f) {
     }
 }
 
-constexpr std::array<std::string_view, 12> kFeatureNames{
+constexpr std::array<std::string_view, 13> kFeatureNames{
     "sensing", "max_designated_events", "worlds", "designated",
     "actions", "agents", "atoms", "goal_modal_depth",
     "goal_kw_only", "goal_has_atom_conjunct", "kd45", "partial_obs",
+    "goal_unsat_init",
 };
 
 constexpr std::array<std::string_view, 3> kStrategyLabels{"gbfs", "ehc", "aostar"};
@@ -200,6 +201,16 @@ TaskFeatures TaskFeatures::extract(const PlanningTask& task) {
     f.kd45        = task.kd45 ? 1 : 0;
     f.partial_obs = task.partial_obs ? 1 : 0;
 
+    if (task.goal) {
+        const Formula& g = *task.goal;
+        if (g.kind == FormulaKind::And) {
+            for (auto& c : g.children)
+                if (!task.init.satisfies(*c)) f.goal_unsat_init += 1;
+        } else if (!task.init.satisfies(g)) {
+            f.goal_unsat_init = 1;
+        }
+    }
+
     return f;
 }
 
@@ -216,6 +227,7 @@ std::optional<double> TaskFeatures::lookup(std::string_view name) const {
     if (name == "goal_has_atom_conjunct") return goal_has_atom_conjunct;
     if (name == "kd45")                   return kd45;
     if (name == "partial_obs")            return partial_obs;
+    if (name == "goal_unsat_init")        return goal_unsat_init;
     return std::nullopt;
 }
 
@@ -319,12 +331,15 @@ SelectionPolicy SelectionPolicy::builtin() {
               cond("kd45", Comparison::Eq, 0)}),
 
         // KD45 seriality repair leaves conditional structure even without
-        // sensing events, which AO* handles and EHC does not.
+        // sensing events, which AO* handles and EHC does not. Iterative
+        // deepening is exponential in plan depth, so only for goals with few
+        // unmet conjuncts (spy-ring linear: GBFS 30 ms vs AO* 43 s).
         rule("kd45-small", "aostar",
              {cond("kd45", Comparison::Eq, 1),
               cond("worlds", Comparison::Le, 8),
               cond("designated", Comparison::Le, 4),
-              cond("goal_modal_depth", Comparison::Ge, 1)}),
+              cond("goal_modal_depth", Comparison::Ge, 1),
+              cond("goal_unsat_init", Comparison::Le, 3)}),
 
         // EHC's plateau escape is a BFS over full models: cheap only while the
         // model is small and the goal shallow.

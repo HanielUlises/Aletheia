@@ -41,8 +41,8 @@ Grounded JSON over 1 MB is not committed; `ground.sh` rebuilds it.
 
 | instance | worlds | result |
 |---|---:|---|
-| linear a5-k3-r4 | 8 | AO\*, 2.6M expansions, 53 s |
-| linear a6-k3-r4 | 8 | timeout (AO\*) |
+| linear a5-k3-r4 | 8 | GBFS, 18-step plan, 27 ms |
+| linear a6-k3-r4 | 8 | GBFS, 33-step plan, 53 ms |
 | linear a8-k5-r6 | 32 | GBFS, 286-step plan, 1.1 s |
 | sensing a4-k2-r3 | 4 | AO\*, 466k expansions, 6.7 s |
 | sensing a5-k2-r3 and up | 4–64 | timeout; 6–7 GB at a7–a8 |

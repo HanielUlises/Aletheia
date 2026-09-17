@@ -123,6 +123,7 @@ starts:
 | `goal_has_atom_conjunct` | 1 if the goal has a classical (non-modal) conjunct |
 | `kd45` | 1 for a KD45 frame, 0 for S5 |
 | `partial_obs` | 1 if any action has heterogeneous observability |
+| `goal_unsat_init` | top-level goal conjuncts false in the initial state |
 
 Outcomes must be `gbfs`, `ehc`, or `aostar` for strategy, and `ug`, `ed`, `ks`,
 `wc`, `rpg`, `radd` for heuristic.
