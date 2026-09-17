@@ -37,6 +37,7 @@ struct TaskFeatures {
     double goal_has_atom_conjunct= 0;
     double kd45                  = 0;  // 0 = S5 frame, 1 = KD45 frame
     double partial_obs           = 0;
+    double goal_unsat_init       = 0;  // top-level goal conjuncts false initially
 
     static TaskFeatures extract(const PlanningTask& task);
 
